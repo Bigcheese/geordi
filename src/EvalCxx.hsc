@@ -212,7 +212,7 @@ instance Show EvaluationResult where
     (Run, Signaled s, _) | s == sigSEGV -> o ++ parsep : "Undefined behavior detected."
     (Run, _, _) -> ErrorFilters.prog $ o ++ parsep : show r
     (Link, Exited (ExitFailure _), _) -> ErrorFilters.ld o
-    _ -> "g++: " ++ show r
+    _ -> show r
 
 prog_env :: [(String, String)]
 prog_env =
@@ -246,16 +246,14 @@ evaluate cfg req = do
     -- Same as utf8-string's System.IO.UTF8.writeFile, but I'm hoping that with GHC's improving UTF-8 support we can eventually drop the dependency on utf8-string altogether.
   env <- filter (pass_env . fst) . getEnvironment
   let
-    gxx :: [String] -> Stage -> IO EvaluationResult -> IO EvaluationResult
-    gxx argv stage act = do
-      cr <- capture_restricted (gxxPath cfg) argv env (resources stage)
+    clang_cc1 :: [String] -> Stage -> IO EvaluationResult -> IO EvaluationResult
+    clang_cc1 argv stage act = do
+      cr <- capture_restricted "/usr/bin/clang" ("-cc1" : argv) env (resources stage)
       if cr == CaptureResult (Exited ExitSuccess) "" then act else return $ EvaluationResult stage cr
   let cf = if no_warn req then "-w" : compileFlags cfg else compileFlags cfg
-  gxx (["-S", "t.cpp"] ++ cf) Compile $ do
+  clang_cc1 (["-include-pch", "prelude.hpp.pch", "-fcatch-undefined-behavior", {-"-ftrapv",-} "-emit-llvm-bc", "-ferror-limit", "1", "-fmessage-length", "0", {-"-fexceptions",-} {-"-fgnu-runtime", "-fdiagnostics-show-option",-} "-x", "c++-cpp-output", "t.cpp"] ++ cf) Compile $ do
   if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") else do
-  gxx (["-c", "t.s"] ++ cf) Assemble $ do
-  gxx (["t.o", "-o", "t"] ++ cf ++ linkFlags cfg) Link $ do
-  EvaluationResult Run . capture_restricted "/t" ["second", "third", "fourth"] (env ++ prog_env) (resources Run)
+  EvaluationResult Run . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
 
 evaluator :: IO (Request -> IO EvaluationResult, CompileConfig)
 evaluator = do
@@ -270,8 +268,9 @@ evaluator = do
 
 ignored_syscalls, allowed_syscalls :: [SysCall]
 
+
 ignored_syscalls = -- These are effectively replaced with "return 0;".
-  [ SYS_chmod, SYS_fadvise64, SYS_unlink, SYS_munmap, SYS_madvise, SYS_umask, SYS_rt_sigaction, SYS_rt_sigprocmask, SYS_ioctl, SYS_setitimer, SYS_timer_settime, SYS_timer_delete, SYS_vfork {- see "Secure compilation" -}
+  [ SYS_fadvise64, SYS_munmap, SYS_madvise, SYS_umask, SYS_unlink, SYS_rt_sigaction, SYS_rt_sigprocmask, SYS_ioctl, SYS_timer_settime
   #ifdef __x86_64__
     , SYS_fcntl
   #else
@@ -280,14 +279,12 @@ ignored_syscalls = -- These are effectively replaced with "return 0;".
   ]
 
 allowed_syscalls =
-  [ SYS_open, SYS_write, SYS_uname, SYS_brk, SYS_read, SYS_mmap, SYS_exit_group, SYS_getpid, SYS_access, SYS_getrusage, SYS_close, SYS_gettimeofday, SYS_time, SYS_writev, SYS_execve, SYS_mprotect, SYS_getcwd, SYS_times
+  [ SYS_open, SYS_write, SYS_uname, SYS_brk, SYS_read, SYS_mmap, SYS_exit_group, SYS_getpid, SYS_access, SYS_getrusage, SYS_close, SYS_gettimeofday, SYS_time, SYS_writev, SYS_execve, SYS_mprotect, SYS_getcwd, SYS_times, SYS_readlink, SYS_mremap
 
   -- On x86_64, SYS_times is necessary for clock().
 
-  , SYS_getdents64, SYS_pread64, SYS_readv -- for gold
-
   #ifdef __x86_64__
-    , SYS_stat, SYS_fstat, SYS_arch_prctl, SYS_getrlimit, SYS_lseek, SYS_lstat, SYS_dup
+    , SYS_stat, SYS_fstat, SYS_arch_prctl, SYS_lseek, SYS_lstat, SYS_dup
   #else
     , SYS_fstat64, SYS_lstat64, SYS_stat64, SYS_ugetrlimit, SYS__llseek, SYS_mmap2, SYS_mremap, SYS_set_thread_area, SYS_readlink
   #endif

@@ -100,9 +100,6 @@ propagateE (Right x) f = f x
 optParser :: Parser Char (E (Set EvalOpt, [EphemeralOpt]))
 optParser = first Set.fromList ‥ partitionEithers ‥ option (return []) P.optParser
 
-prel :: String
-prel = "#include \"prelude.hpp\"\n"
-
 type CxxEvaluator = EvalCxx.Request → IO String
 
 respond :: CxxEvaluator → EditableRequest → E (IO String)
@@ -112,7 +109,7 @@ respond evf = case_of
   EditableRequest (Evaluate opts) code → do
     sc ← parseOrFail (Cxx.Parse.code << eof) (dropWhile isSpace code) "request"
     return $ evf $ EvalCxx.Request
-      (prel ++ (if NoUsingStd ∈ opts then "" else "using namespace std;\n")
+      ((if NoUsingStd ∈ opts then "" else "using namespace std;\n")
         ++ (if Terse ∈ opts then "#include \"terse.hpp\"\n" else "")
         ++ show (Cxx.Operations.expand $ Cxx.Operations.shortcut_syntaxes $ Cxx.Operations.line_breaks sc))
       (CompileOnly ∉ opts) (NoWarn ∈ opts)
@@ -155,7 +152,7 @@ editcmd h evf prevs = do
 
 cout_response :: CxxEvaluator → String → IO Response
 cout_response evf s = Response Nothing .
-  evf (EvalCxx.Request (prel ++ "int main() { std::cout << " ++ s ++ "; }") True False)
+  evf (EvalCxx.Request ("int main() { std::cout << " ++ s ++ "; }") True False)
 
 p :: Highlighter → CxxEvaluator → EvalCxx.CompileConfig → [EditableRequest] → Parser Char (E (IO Response))
 p h evf compile_cfg prevs = (spaces >>) $ do
@@ -209,7 +206,7 @@ p h evf compile_cfg prevs = (spaces >>) $ do
       | otherwise → parseSuccess . noErrors . respond_and_remember evf =<< EditableRequest (Evaluate evalopts) . getInput }
   where
     help_response = cout_response evf "help"
-    version_response = cout_response evf "\"g++ (GCC) \" << __VERSION__"
+    version_response = cout_response evf "\"Clang \" << __clang_version__"
     uname_response = cout_response evf "geordi::uname()"
 
 evaluator :: Highlighter → IO (String → Context → IO Response)

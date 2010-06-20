@@ -8,7 +8,7 @@
 #endif
   // "E7tKRJpMcGq574LY" is just a random string, recognized by the error filters, chosen to minimize the chance of false positives.
 
-#include "tracked.hpp"
+//#include "tracked.hpp"
 #include "using.hpp"
 #include "more_ostreaming.hpp"
 #include "literal_escape.hpp"
@@ -49,7 +49,7 @@
 #include <sstream>
 #include <stack>
 #include <stdexcept>
-#include <strstream>
+//#include <strstream>
 #include <streambuf>
 #include <string>
 #include <typeinfo>
@@ -80,10 +80,12 @@
 #include <cwchar>
 #include <cwctype>
 
+/* clang chokes on these:
 #include <tr1/array>
 #include <tr1/memory>
 #include <tr1/type_traits>
 #include <tr1/utility>
+*/
 
 /* these seem to increase the precompiled header size disproportionally:
 #include <tr1/tuple>
@@ -96,18 +98,23 @@
 #include <boost/any.hpp>
 #include <boost/array.hpp>
 #include <boost/assert.hpp>
+/*
 #include <boost/assign.hpp>
 #include <boost/bind.hpp>
 #include <boost/checked_delete.hpp>
+*/
 #include <boost/format.hpp>
 #include <boost/implicit_cast.hpp>
+/*
 #include <boost/integer.hpp>
 #include <boost/integer_traits.hpp>
 #include <boost/iterator_adaptors.hpp>
+*/
 #include <boost/lexical_cast.hpp>
 #include <boost/multi_array.hpp>
 #include <boost/next_prior.hpp>
 #include <boost/noncopyable.hpp>
+
 #include <boost/optional.hpp>
 #include <boost/range.hpp>
 #include <boost/rational.hpp>
@@ -117,9 +124,11 @@
 #include <boost/shared_array.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/smart_ptr.hpp>
+/*
 #include <boost/tokenizer.hpp>
 #include <boost/utility.hpp>
 #include <boost/variant.hpp>
+*/
 
 #if BOOST_VERSION >= 103400
   #include <boost/foreach.hpp>
@@ -164,4 +173,4 @@ namespace geordi { geordi::initializer_t const initializer; }
 
 #define typeid(...) ::type_strings_detail::type_info::from_std(typeid(__VA_ARGS__))
 
-using namespace boost::assign;
+//using namespace boost::assign;

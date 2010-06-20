@@ -93,9 +93,6 @@ tests "resources" =
     RegexMatch "\\+{1,50} File size limit exceeded$"
   , test "System call interception" "<< fork()" $ RegexMatch "SYS_[^:]*: Operation not permitted"
   , test "Signal" "{ int x = 0; cout << 3 / x; }" $ ExactMatch "Floating point exception"
-  , test "Recursive exec()"
-    "int main (int const argc, char const * const * argv) { string s; if (argc >= 2) s = argv[1]; s += 'x'; if (s.size() % 100 == 0) cout << '+' << flush; execl(\"/t\", \"/t\", s.c_str(), 0); }" $
-    RegexMatch "\\++( Killed)?$"
   ]
 
 tests "misc" =
@@ -107,7 +104,6 @@ tests "misc" =
     test "Nontrivial program (Brainfuck interpreter)" ("{b(program);}char program[]=\">>,[>>,]<<[[-<+<]>[>[>>]<[.[-]<[[>>+<<-]<]>>]>]<<]\",input[]=\"" ++ s ++ "\", *i=input,m[512]={},*p=m;void b(char*c){for(;*c&&*c!=']';++c){(*((p+=*c=='>')-=*c=='<')+=*c=='+') -=*c=='-';*c=='.'&&cout<<*p;if(*c==',')*p=*i++;if(*c=='['){for(++c;*p;)b(c);for(int d=0;*c!=']'||d--;++c)d+=*c=='[';}}}") $ ExactMatch (sort s)
   , test "srand()/time()" "{ srand(time(0)); }" NoOutput
   , test "line breaks" "#define X \"\\\\\" \\ #define Y X \\ int main() { cout \\ << Y Y; }" $ ExactMatch "\\\\"
-  , test "-v" "-v" $ PrefixMatch "g++ (GCC) 4"
   , test "getopt" "-monkey chicken" $ ExactMatch "error: No such option: -m"
   , test "operator new/delete overriding" "{ cerr << \"| \"; list<int> v(5); } void * operator new(size_t const s) throw(bad_alloc) { cerr << s << ' '; return malloc(s); } void operator delete(void * const p) throw() { free(p); }" $ RegexMatch "[^-]*\\| [[:digit:] ]+"
   ]
