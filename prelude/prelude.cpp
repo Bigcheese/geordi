@@ -28,18 +28,6 @@ namespace geordi
   {
     bool is_prefix_of(char const * a, char const * b) { while(*a && *b == *a) { ++a; ++b; } return !*a; }
 
-    void overflow_handler(int64_t const a, int64_t const b, char const op, char const width)
-    {
-      switch(op) {
-        case 3: std::printf("%sOverflow: %ld + %ld", parsep, a, b); break;
-        case 5: std::printf("%sUnderflow: %ld - %ld", parsep, a, b); break;
-        case 7: std::printf("%sOverflow: %ld * %ld", parsep, a, b); break;
-        default: std::printf("%sOverflow/underflow (a=%ld, b=%ld, c=%d, d=%d)", parsep, a, b, op, width);
-      }
-      std::fclose(stdout);
-      std::abort();
-    }
-
     void terminate_handler(bool const unexp)
     {
       // We use printf because cout/cerr may be dead.
@@ -121,10 +109,6 @@ namespace geordi
     return r;
   }
 } // namespace geordi
-
-extern "C" {
-  void (* __overflow_handler)(int64_t, int64_t, char, char) = geordi::overflow_handler;
-}
 
 std::ostream & operator<<(std::ostream & o, wchar_t const c)
 {
