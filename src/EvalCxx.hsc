@@ -198,7 +198,7 @@ subst_parseps = f
       s' -> ' ' : s'
     f (c:s) = c : f s
 
-data Stage = Compile | Assemble | Link | Run
+data Stage = Compile | Run
 
 data EvaluationResult = EvaluationResult Stage CaptureResult
   -- The capture result of the last stage attempted.
@@ -207,11 +207,9 @@ instance Show EvaluationResult where
   show (EvaluationResult stage (CaptureResult r o)) = subst_parseps $ case (stage, r, o) of
     (Compile, Exited ExitSuccess, "") -> strerror eOK
     (Compile, Exited _, _) -> ErrorFilters.cc1plus o
-    (Assemble, Exited (ExitFailure _), _) -> ErrorFilters.as o
     (Run, Exited ExitSuccess, _) -> ErrorFilters.prog o
     (Run, Signaled s, _) | s == sigSEGV -> o ++ parsep : "Undefined behavior detected."
     (Run, _, _) -> ErrorFilters.prog $ o ++ parsep : show r
-    (Link, Exited (ExitFailure _), _) -> ErrorFilters.ld o
     _ -> show r
 
 prog_env :: [(String, String)]
@@ -306,6 +304,4 @@ resources stage = Resources
   where
     t = case stage of
       Compile -> 10
-      Assemble -> 5
-      Link -> 10
       Run -> 4
