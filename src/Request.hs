@@ -13,7 +13,7 @@ import Util (Option(..), (.), (.∨.), total_tail, partitionMaybe)
 import Prelude hiding (catch, (.))
 import Prelude.Unicode
 
-data EvalOpt = CompileOnly | Terse | NoWarn | NoUsingStd
+data EvalOpt = CompileOnly | Terse | NoWarn | NoUsingStd | FixIt
   deriving (Eq, Enum, Bounded, Ord)
 
 instance Option EvalOpt where
@@ -21,10 +21,12 @@ instance Option EvalOpt where
   short Terse = Just 't'
   short NoWarn = Just 'w'
   short NoUsingStd = Nothing
+  short FixIt = Nothing
   long CompileOnly = "compile-only"
   long Terse = "terse"
   long NoWarn = "no-warn"
   long NoUsingStd = "no-using-std"
+  long FixIt = "fixit"
 
 data EphemeralOpt = Resume | Help | Version deriving (Eq, Enum, Bounded)
 

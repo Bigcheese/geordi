@@ -112,7 +112,7 @@ respond evf = case_of
       ((if NoUsingStd ∈ opts then "" else "using namespace std;\n")
         ++ (if Terse ∈ opts then "#include \"terse.hpp\"\n" else "")
         ++ show (Cxx.Operations.expand $ Cxx.Operations.shortcut_syntaxes $ Cxx.Operations.line_breaks sc))
-      (CompileOnly ∉ opts) (NoWarn ∈ opts)
+      (CompileOnly ∉ opts) (NoWarn ∈ opts) (FixIt ∈ opts)
 
 respond_and_remember :: CxxEvaluator → EditableRequest → IO Response
 respond_and_remember evf er = Response (Just $ AddLast er) . either (return . ("error: " ++)) id (respond evf er)
@@ -152,7 +152,7 @@ editcmd h evf prevs = do
 
 cout_response :: CxxEvaluator → String → IO Response
 cout_response evf s = Response Nothing .
-  evf (EvalCxx.Request ("int main() { std::cout << " ++ s ++ "; }") True False)
+  evf (EvalCxx.Request ("int main() { std::cout << " ++ s ++ "; }") True False False)
 
 p :: Highlighter → CxxEvaluator → EvalCxx.CompileConfig → [EditableRequest] → Parser Char (E (IO Response))
 p h evf compile_cfg prevs = (spaces >>) $ do

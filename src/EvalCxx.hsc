@@ -231,7 +231,7 @@ jail = do
   setGroupID gid
   setUserID uid
 
-data Request = Request { code :: String, also_run, no_warn :: Bool }
+data Request = Request { code :: String, also_run, no_warn, fixit :: Bool }
 
 pass_env :: String -> Bool
 pass_env s = ("LC_" `isPrefixOf` s) || (s `elem` ["PATH", "LD_LIBRARY_PATH"])
@@ -243,13 +243,11 @@ evaluate cfg req = do
   withFile "t.cpp" WriteMode $ \h -> hSetEncoding h utf8 >> hPutStrLn h (code req)
     -- Same as utf8-string's System.IO.UTF8.writeFile, but I'm hoping that with GHC's improving UTF-8 support we can eventually drop the dependency on utf8-string altogether.
   env <- filter (pass_env . fst) . getEnvironment
-  let
-    clang_cc1 :: [String] -> Stage -> IO EvaluationResult -> IO EvaluationResult
-    clang_cc1 argv stage act = do
-      cr <- capture_restricted "/usr/bin/clang" ("-cc1" : argv) env (resources stage)
-      if cr == CaptureResult (Exited ExitSuccess) "" then act else return $ EvaluationResult stage cr
-  let cf = if no_warn req then "-w" : compileFlags cfg else compileFlags cfg
-  clang_cc1 (["-include-pch", "prelude.hpp.pch", "-fcatch-undefined-behavior", {-"-ftrapv",-} "-emit-llvm-bc", "-ferror-limit", "1", "-fmessage-length", "0", {-"-fexceptions",-} {-"-fgnu-runtime", "-fdiagnostics-show-option",-} "-x", "c++-cpp-output", "t.cpp"] ++ cf) Compile $ do
+  let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -emit-llvm-bc -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp"
+  let run_clang extra_flags = capture_restricted "/usr/bin/clang" (basic_flags ++ ["-w" | no_warn req] ++ compileFlags cfg ++ extra_flags) env (resources Compile)
+  when (fixit req) $ run_clang ["-fixit", "-fix-what-you-can"] >> return ()
+  cr <- run_clang []
+  if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr else do
   if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") else do
   EvaluationResult Run . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
 
