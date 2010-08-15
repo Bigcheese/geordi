@@ -30,20 +30,24 @@ map_plain f (Parens c) = Parens $ map (map_plain f) c
 map_plain f (Squares c) = Squares $ map (map_plain f) c
 map_plain _ x = x
 
+int_main, cout :: String
+int_main = "\nint main(int argc, char * argv[])"
+cout = "::std::cout << "
+
 expand :: ShortCode → Code
 expand (LongForm c) = c
-expand (Block c c') = c' ++ [Plain "\nint main(int argc, char * argv[])", Curlies c]
-expand (Print c c') = expand $ Block ([Plain "::std::cout << "] ++ c ++ [Plain "\n;"]) c'
+expand (Block c c') = c' ++ [Plain int_main, Curlies c]
+expand (Print c c') = expand $ Block ([Plain cout] ++ c ++ [Plain "\n;"]) c'
   -- The newline before the semicolon makes //-style comments work.
 
 unexpand :: ShortCode → Int → Int
 unexpand (LongForm _) p = p
 unexpand (Block a b) p
-  | p >= blen = p - blen - 34
+  | p > blen = p - blen - length int_main
   | otherwise = p + length (show $ Curlies a)
   where blen = length (show b)
 unexpand (Print a b) p
-  | p >= blen = p - blen - 48
+  | p > blen = p - blen - length int_main - length cout + 1
   | otherwise = p + length (show a) + 3
   where blen = length (show b)
     -- Todo: These magic constants are totally evil.
