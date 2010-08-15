@@ -12,7 +12,6 @@ import Control.Monad (foldM)
 import Data.Monoid (Monoid(..))
 import Control.Applicative ((<|>))
 import Control.Arrow ((&&&))
-import Request (EditableRequest(..), EditableRequestKind(..))
 import Cxx.Basics (GeordiRequest)
 import Data.SetOps
 import Util ((.), E)
@@ -20,6 +19,7 @@ import Util ((.), E)
 import Prelude hiding ((.))
 import Prelude.Unicode
 import Editing.Basics
+import Request
 
 overlap :: Range a → Range a → Int
 overlap (Range x s) (Range x' s') = max 0 $ min (x + s) (x' + s') - max x x'

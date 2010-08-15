@@ -12,6 +12,7 @@ import Data.Monoid (Monoid(..))
 import Util (orElse, take_atleast, (.), isIdChar, invert)
 import Editing.Basics
 import Prelude hiding ((.))
+import Request
 import Prelude.Unicode
 
 diff_as_Edits :: String → String → [Edit]

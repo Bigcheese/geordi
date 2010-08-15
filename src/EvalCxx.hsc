@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PatternGuards, ViewPatterns #-}
 
 {-- Correct ptrace-ing
 
@@ -53,7 +53,7 @@ In our code, M is close_range_end.
 
 -}
 
-module EvalCxx (evaluator, EvaluationResult(..), Request(..), CompileConfig(..)) where
+module EvalCxx (evaluator, EvaluationResult(..), Request(..), CompileConfig(..), Fix(..)) where
 
 import qualified Ptrace
 import qualified Codec.Binary.UTF8.String as UTF8
@@ -77,6 +77,7 @@ import System.IO (withFile, IOMode(..), hSetEncoding, utf8, hPutStrLn)
 import Foreign.C (CInt, CSize, ePERM, eOK)
 import System.Exit (ExitCode(..))
 import Data.List ((\\), isPrefixOf)
+import Data.Maybe (isNothing)
 import System.Posix.User
   (getGroupEntryForName, getUserEntryForName, setGroupID, setUserID, groupID, userID)
 import System.Posix
@@ -200,13 +201,15 @@ subst_parseps = f
 
 data Stage = Compile | Run
 
-data EvaluationResult = EvaluationResult Stage CaptureResult
+data Fix = Fix { fix_start, fix_size :: Int, fix_replacement :: String }
+
+data EvaluationResult = EvaluationResult Stage CaptureResult (Maybe Fix)
   -- The capture result of the last stage attempted.
 
 instance Show EvaluationResult where
-  show (EvaluationResult stage (CaptureResult r o)) = subst_parseps $ case (stage, r, o) of
+  show (EvaluationResult stage (CaptureResult r o) f) = subst_parseps $ case (stage, r, o) of
     (Compile, Exited ExitSuccess, "") -> strerror eOK
-    (Compile, Exited _, _) -> ErrorFilters.cc1plus o
+    (Compile, Exited _, _) -> ErrorFilters.cc1plus o ++ (if isNothing f then "" else " (fix known)")
     (Run, Exited ExitSuccess, _) -> ErrorFilters.prog o
     (Run, Signaled s, _) | s == sigSEGV -> o ++ parsep : "Undefined behavior detected."
     (Run, _, _) -> ErrorFilters.prog $ o ++ parsep : show r
@@ -231,7 +234,7 @@ jail = do
   setGroupID gid
   setUserID uid
 
-data Request = Request { code :: String, also_run, no_warn, fixit :: Bool }
+data Request = Request { code :: String, also_run, no_warn :: Bool }
 
 pass_env :: String -> Bool
 pass_env s = ("LC_" `isPrefixOf` s) || (s `elem` ["PATH", "LD_LIBRARY_PATH"])
@@ -244,12 +247,18 @@ evaluate cfg req = do
     -- Same as utf8-string's System.IO.UTF8.writeFile, but I'm hoping that with GHC's improving UTF-8 support we can eventually drop the dependency on utf8-string altogether.
   env <- filter (pass_env . fst) . getEnvironment
   let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -emit-llvm-bc -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp"
-  let run_clang extra_flags = capture_restricted "/usr/bin/clang" (basic_flags ++ ["-w" | no_warn req] ++ compileFlags cfg ++ extra_flags) env (resources Compile)
-  when (fixit req) $ run_clang ["-fixit", "-fix-what-you-can"] >> return ()
-  cr <- run_clang []
-  if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr else do
-  if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") else do
-  EvaluationResult Run . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
+  cr <- capture_restricted "/usr/bin/clang" (basic_flags ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
+  if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr (get_fixit $ output cr) else do
+  if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") Nothing else do
+  (\d -> EvaluationResult Run d Nothing) . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
+
+get_fixit :: String -> Maybe Fix
+get_fixit (stripInfix "\nGEORDIFIXIT " -> Just (_,
+  span Char.isDigit -> (read -> begin,
+  drop 1 -> (span Char.isDigit -> (read -> size,
+  drop 1 -> (takeWhile (/= '\n') -> replacement))))))
+    = Just $ Fix begin size replacement
+get_fixit _ = Nothing
 
 evaluator :: IO (Request -> IO EvaluationResult, CompileConfig)
 evaluator = do

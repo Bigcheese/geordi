@@ -9,6 +9,7 @@ import Util (isVowel, show_long_opts, capitalize, commas_and, Ordinal, none, isI
 import Cxx.Basics (DeclaratorId, Findable)
 import Data.Foldable (toList)
 import Editing.Basics
+import Request
 import qualified Prelude
 import Prelude hiding (Show(..))
 

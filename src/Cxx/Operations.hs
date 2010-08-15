@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable, MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, FlexibleContexts, UndecidableInstances, PatternGuards, Rank2Types, OverlappingInstances, ScopedTypeVariables, ExistentialQuantification, TypeSynonymInstances, CPP, ViewPatterns #-}
 
-module Cxx.Operations (apply, mapply, squared, parenthesized, is_primary_TypeSpecifier, split_all_decls, map_plain, shortcut_syntaxes, blob, resume, expand, line_breaks, specT, find, is_pointer_or_reference, namedPathTo, findable_productions, make_edits) where
+module Cxx.Operations (apply, mapply, squared, parenthesized, is_primary_TypeSpecifier, split_all_decls, map_plain, shortcut_syntaxes, blob, resume, expand, line_breaks, specT, find, is_pointer_or_reference, namedPathTo, findable_productions, make_edits, unexpand) where
 
 import qualified Cxx.Show
 import qualified Data.List as List
@@ -9,7 +9,8 @@ import qualified Data.Char as Char
 import qualified Data.Maybe as Maybe
 import Util (Convert(..), (.), total_tail, strip, isIdChar, TriBool(..), MaybeEitherString(..), Phantom(..), neElim, NeList, orElse, neFilter)
 import Cxx.Basics
-import Editing.Basics (Range(..), Offsettable(..), Edit)
+import Editing.Basics (Offsettable(..))
+import Request (Range(..), Edit)
 import Editing.Diff (diff_as_Edits)
 import Data.Function (on)
 import Data.Foldable (toList, any)
@@ -34,6 +35,18 @@ expand (LongForm c) = c
 expand (Block c c') = c' ++ [Plain "\nint main(int argc, char * argv[])", Curlies c]
 expand (Print c c') = expand $ Block ([Plain "::std::cout << "] ++ c ++ [Plain "\n;"]) c'
   -- The newline before the semicolon makes //-style comments work.
+
+unexpand :: ShortCode → Int → Int
+unexpand (LongForm _) p = p
+unexpand (Block a b) p
+  | p >= blen = p - blen - 34
+  | otherwise = p + length (show $ Curlies a)
+  where blen = length (show b)
+unexpand (Print a b) p
+  | p >= blen = p - blen - 48
+  | otherwise = p + length (show a) + 3
+  where blen = length (show b)
+    -- Todo: These magic constants are totally evil.
 
 cstyle_comments :: Code → Code
 cstyle_comments = map f where f (SingleComment s) = MultiComment s; f c = c

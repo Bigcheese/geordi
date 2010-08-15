@@ -25,6 +25,7 @@ import Util ((.), Convert(..), Op(..), ops_cost, erase_indexed, levenshtein, rep
 import Prelude hiding (last, (.), all, (!!), sequence, mapM)
 import Prelude.Unicode hiding ((∈))
 import Editing.Basics
+import Request
 
 import Control.Monad.Reader (ReaderT(..), local, ask)
 
@@ -395,6 +396,7 @@ instance Find Command [FindResult Edit] where
     l ← (fmap (\(Found _ x) → replace_range x)) . find s
     (Found InGiven .) . concat . toList . forM l (\x →
       Cxx.Operations.make_edits (convert x) b 0 tree)
+  find (FixIt e) = return [Found InGiven e]
 
 use_tests :: IO ()
 use_tests = do

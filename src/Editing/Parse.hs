@@ -15,11 +15,11 @@ import Data.Generics (DataType, Constr, toConstr, Data)
 import Parsers (choice, eof, (<|>), (<?>), symbols, char, anySymbol, lookAhead, notFollowedBy, many1Till, optParser, try, many, satisfy, spaces)
 import Util ((<<), liftA2, Ordinal(..), apply_if, cardinals, plural, indefinite, neElim)
 import Cxx.Basics (DeclaratorId)
-import Request (EvalOpt)
 
 import Prelude hiding ((.), id, and)
 import Prelude.Unicode
 import Editing.Basics
+import Request
 
 data Terminators = Terminators { term_eof :: Bool, term_keywords :: [String], and_conts :: [String] } deriving Eq
   -- term_eof states whether eof is a valid termination of a directly preceding verbatim stings.

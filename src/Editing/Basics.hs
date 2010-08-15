@@ -20,6 +20,7 @@ import Util (Convert(..), Invertible(..), Ordinal(..), (.), findMaybe, take_atle
 import Data.List.NonEmpty ((|:), (.:))
 import Data.Semigroup (Semigroup(..))
 
+import Request
 import Prelude hiding ((.))
 
 -- AndLists
@@ -35,19 +36,6 @@ instance Semigroup (AndList a) where
   AndList x .++. AndList y = AndList $ x .++. y
 
 -- Positions, ranges, and anchors.
-
-type Pos a = Int
-  -- The 'a' phantom parameter denotes the element type for the position. This prevents accidental mix-ups of different kinds of positions.
-data Range a = Range { start :: Pos a, size :: Int } deriving Eq
-
-data BefAft = Before | After deriving (Eq, Ord)
-
-data Anchor = Anchor { anchor_befAft :: BefAft, anchor_pos :: Pos Char } deriving Eq
-
-type ARange = BefAft → Anchor
-
-data DualARange = DualARange { full_range, replace_range :: ARange }
-  -- In "void f(int i, double d);", the command "replace first parameter-declaration with char c" should produce "void f(char c, double d);", while the command "erase first parameter-declaration" should produce "void f(double d);". Hence, in the former, the clause "first parameter-declaration" should match "char c", while in the latter, it should match "char c, ". To accomodate this, our substring resolution functions return DualARanges containing both of these ranges.
 
 end :: Range a → Pos a
 end (Range x y) = x + y
@@ -124,15 +112,6 @@ unanchor_range r | Anchor _ x ← r Before, Anchor _ y ← r After = Range x (y 
 instance Ord Anchor where compare = comparing (anchor_pos &&& anchor_befAft)
 
   -- This BefAft will probably need to be generalized to Before|After|Both for "insert x between 3 and 4".
-data Edit
-  = RangeReplaceEdit (Range Char) String
-  | InsertEdit Anchor String
-  | MoveEdit BefAft Int (Range Char)
-    -- The Int is an offset. If it is a nonnegative number n, the insert position is n characters beyond the end of the source range. If it is a negative number -n, the insert position is n characters before the start of the source range. We use this instead of a normal Anchor because it ensures that silly "move into self"-edits are not representable. This constructor must not be used by anyone but the makeMoveEdit smart constructor, which detects such edits.
-  | AddOptions [Request.EvalOpt]
-  | RemoveOptions [Request.EvalOpt]
-    deriving Eq
-  -- We don't just use a RangeReplaceEdit with range length 0 for insertions, because it is not expressive enough. For instance, given "xy", insertions at the positions "after x" and "before y" would both designate position 1, but a prior "add z after x" edit should increment the latter position but not the former. InsertEdit's BefAft argument expresses this difference.
 
 makeMoveEdit :: Monad m ⇒ Anchor → Range Char → m Edit
 makeMoveEdit (Anchor ba p) r@(Range st si)
@@ -184,6 +163,7 @@ data Command
   | Swap Substrs (Maybe Substrs)
   | Make MakeSubject Cxx.Basics.MakeDeclaration
   | Use (AndList UseClause)
+  | FixIt Edit
 
 data FinalCommand
   = Show (Maybe Substrs)
