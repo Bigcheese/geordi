@@ -1,0 +1,23 @@
+--- tools/clang/lib/Frontend/TextDiagnosticPrinter.cpp
++++ tools/clang/lib/Frontend/TextDiagnosticPrinter.cpp
+@@ -360,6 +360,20 @@
+     return;
+   }
+ 
++  for (FixItHint const * hint = Hints; hint != Hints + NumHints; ++hint) {
++    CharSourceRange const & rr = hint->RemoveRange;
++    OS << "GEORDIFIXIT ";
++    if(rr.isValid()) {
++      unsigned const
++        begin = SM.getDecomposedLoc(rr.getBegin()).second,
++        end = SM.getDecomposedLoc(rr.getEnd()).second
++          + (rr.isTokenRange() ? Lexer::MeasureTokenLength(rr.getEnd(), SM, *LangOpts) : 0);
++      OS << begin << ' ' <<end - begin;
++    }
++    else OS << (hint->InsertionLoc.isValid() ? SM.getDecomposedLoc(hint->InsertionLoc).second : 0) << " 0";
++    OS << ' ' << hint->CodeToInsert << '\n';
++  }
++
+   // Decompose the location into a FID/Offset pair.
+   std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(Loc);
+   FileID FID = LocInfo.first;
