@@ -5,15 +5,15 @@
 module ErrorFilters (cc1plus, prog) where
 
 import qualified Cxx.Parse
-import Control.Monad (ap, liftM2, mzero, guard)
+import Control.Monad (ap, liftM2, mzero)
 import Text.Regex (Regex, matchRegexAll, mkRegex, subRegex)
-import Data.Maybe (mapMaybe, fromMaybe)
+import Data.Maybe (mapMaybe, fromMaybe, listToMaybe)
 import Data.List (intersperse, isPrefixOf, isSuffixOf, tails)
 import Text.ParserCombinators.Parsec
   (string, sepBy, parse, char, try, getInput, (<|>), satisfy, spaces, manyTill, many1, anyChar, noneOf, option, count, CharParser, notFollowedBy, choice, setInput, eof, oneOf)
 import Text.ParserCombinators.Parsec.Prim (GenParser)
 import Control.Applicative (Applicative(..))
-import Util ((.), (<<), isIdChar, (>+>), strip, replaceInfix, parsep, maybeLast, (!!))
+import Util ((.), (<<), isIdChar, (>+>), strip, replaceInfix, parsep, (!!))
 import Prelude hiding (catch, (.), (!!))
 
 subRegex' :: Regex → String → String → String
@@ -27,11 +27,10 @@ instance Applicative (GenParser Char st) where pure = return; (<*>) = ap
 cc1plus, prog :: String → String
 
 cc1plus e = cleanup_stdlib_templates $ replace_withs $ hide_clutter_namespaces
-  $ fromMaybe e $ maybeLast $ flip mapMaybe (lines e) $ \l → do
-    (_, _, x, _) ← matchRegexAll (mkRegex "(^|\n)[^:]+:([[:digit:]]+:)+ ") l
-    guard $ not $ "note:" `isPrefixOf` x
-    return x
-  -- Even though we use -Wfatal-errors, we may still get several "instantiated from ..." lines. Only the last of these (the one we're interested in) actually says "error"/"warning". We used to have the regex match on that, greatly simplifying the above, but that broke when a language other than English was used.
+  $ fromMaybe e $ listToMaybe $ flip mapMaybe (lines e) $ \l → do
+    (_, _, x, _:_:y:_) ← matchRegexAll (mkRegex "(^|\n)[^:]+:([[:digit:]]+:)+ (error|fatal error|warning):") l
+      -- This is suboptimal, because it breaks for other languages. Todo: revert once Clang bug 7918 is fixed.
+    return $ y ++ ":" ++ x
 
 prog = replaceInfix "E7tKRJpMcGq574LY:" [parsep] . cleanup_stdlib_templates . replace_withs . hide_clutter_namespaces
   -- We also clean up successful output, because it might include dirty assertion failures and {E}TYPE strings. The "E7tKRJpMcGq574LY:" is for libstdc++ debug mode errors; see prelude.hpp.
