@@ -30,7 +30,7 @@ cc1plus e = cleanup_stdlib_templates $ replace_withs $ hide_clutter_namespaces
   $ fromMaybe e $ listToMaybe $ flip mapMaybe (lines e) $ \l → do
     (_, _, x, _:_:y:_) ← matchRegexAll (mkRegex "(^|\n)[^:]+:([[:digit:]]+:)+ (error|fatal error|warning):") l
       -- This is suboptimal, because it breaks for other languages. Todo: revert once Clang bug 7918 is fixed.
-    return $ y ++ ":" ++ x
+    return $ (if y == "fatal error" then "error" else y) ++ ":" ++ x
 
 prog = replaceInfix "E7tKRJpMcGq574LY:" [parsep] . cleanup_stdlib_templates . replace_withs . hide_clutter_namespaces
   -- We also clean up successful output, because it might include dirty assertion failures and {E}TYPE strings. The "E7tKRJpMcGq574LY:" is for libstdc++ debug mode errors; see prelude.hpp.
