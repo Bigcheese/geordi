@@ -78,6 +78,7 @@ import Foreign.C (CInt, CSize, ePERM, eOK)
 import System.Exit (ExitCode(..))
 import Data.List ((\\), isPrefixOf)
 import Data.Maybe (isNothing)
+import Text.Regex (Regex, mkRegex, matchRegex)
 import System.Posix.User
   (getGroupEntryForName, getUserEntryForName, setGroupID, setUserID, groupID, userID)
 import System.Posix
@@ -201,7 +202,10 @@ subst_parseps = f
 
 data Stage = Compile | Run
 
-data Fix = Fix { fix_start, fix_size :: Int, fix_replacement :: String }
+type Line = Int
+type Column = Int
+
+data Fix = Fix { fix_begin, fix_end :: (Line, Column), fix_replacement :: String }
 
 data EvaluationResult = EvaluationResult Stage CaptureResult (Maybe Fix)
   -- The capture result of the last stage attempted.
@@ -246,19 +250,27 @@ evaluate cfg req = do
   withFile "t.cpp" WriteMode $ \h -> hSetEncoding h utf8 >> hPutStrLn h (code req)
     -- Same as utf8-string's System.IO.UTF8.writeFile, but I'm hoping that with GHC's improving UTF-8 support we can eventually drop the dependency on utf8-string altogether.
   env <- filter (pass_env . fst) . getEnvironment
-  let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -emit-llvm-bc -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp"
+  let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -emit-llvm-bc -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp -fdiagnostics-parseable-fixits"
   cr <- capture_restricted "/usr/bin/clang" (basic_flags ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
-  if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr (get_fixit $ output cr) else do
+  if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr (findFix $ output cr) else do
   if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") Nothing else do
   (\d -> EvaluationResult Run d Nothing) . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
 
-get_fixit :: String -> Maybe Fix
-get_fixit (stripInfix "\nGEORDIFIXIT " -> Just (_,
-  span Char.isDigit -> (read -> begin,
-  drop 1 -> (span Char.isDigit -> (read -> size,
-  drop 1 -> (takeWhile (/= '\n') -> replacement))))))
-    = Just $ Fix begin size replacement
-get_fixit _ = Nothing
+unescape :: String → String
+unescape "" = ""
+unescape ('\\':'t':xs) = '\t' : unescape xs
+unescape ('\\':'n':xs) = '\n' : unescape xs
+unescape ('\\':'"':xs) = '"' : unescape xs
+unescape (x:xs) = x : unescape xs
+
+fixitRegex :: Regex
+fixitRegex = mkRegex "\nfix-it:\"t.cpp\":\\{([0-9]{1,3}):([0-9]{1,3})-([0-9]{1,3}):([0-9]{1,3})\\}:\"(([^\\]|\\\\(\\\\|n|t|\"))*)\""
+
+findFix :: String → Maybe Fix
+findFix (matchRegex fixitRegex → Just [line, col, line', col', s, _, _]) =
+  Just $ Fix (read line, read col) (read line', read col') (unescape s)
+findFix _ = Nothing
+  -- Todo: Find all of them, though that really requires that -Wfatal-errors works reliably, which at the time of this writing it does not.
 
 evaluator :: IO (Request -> IO EvaluationResult, CompileConfig)
 evaluator = do

@@ -102,8 +102,14 @@ optParser = first Set.fromList ‥ partitionEithers ‥ option (return []) P.opt
 
 type CxxEvaluator = EvalCxx.Request → IO (String, Maybe EvalCxx.Fix)
 
-fix_as_edit :: (Int → Int) -> (EvalCxx.Fix → Edit)
-fix_as_edit f (EvalCxx.Fix begin siz repl) = RangeReplaceEdit (Range (f begin) siz) repl
+fix_as_edit :: ((Int, Int) → Int) -> (EvalCxx.Fix → Edit)
+fix_as_edit f (EvalCxx.Fix begin end repl) =
+  RangeReplaceEdit (Range begin' $ f end - begin') repl
+ where begin' = f begin
+
+linecol_as_offset :: String → (Int, Int) → Int
+linecol_as_offset s (line, column) =
+  sum (map ((+1) . length) $ take (line - 1) $ lines s) + column - 1
 
 respond :: CxxEvaluator → EditableRequest → E (IO (String, Maybe Edit))
 respond evf = case_of
@@ -113,10 +119,14 @@ respond evf = case_of
     sc ← parseOrFail (Cxx.Parse.code << eof) (dropWhile isSpace code) "request"
     let 
       short = Cxx.Operations.shortcut_syntaxes $ Cxx.Operations.line_breaks sc
-      extra = (if NoUsingStd ∈ opts then "" else "using namespace std;\n")
-        ++ (if Terse ∈ opts then "#include \"terse.hpp\"\n" else "")
-    return $ (second (fix_as_edit (Cxx.Operations.unexpand short . subtract (length extra)) .) .) $ evf $ EvalCxx.Request
-      (extra ++ show (Cxx.Operations.expand short))
+      extra = ["using namespace std;" | NoUsingStd ∈ opts]
+        ++ [ "#include \"terse.hpp\"" | Terse ∈ opts]
+      expanded_code = show (Cxx.Operations.expand short)
+      translate_source_loc :: (Int, Int) → Int
+      translate_source_loc =
+        Cxx.Operations.unexpand short . linecol_as_offset expanded_code . first (subtract (length extra))
+    return $ (second (fix_as_edit translate_source_loc .) .) $ evf $ EvalCxx.Request
+      (unlines extra ++ expanded_code)
       (CompileOnly ∉ opts) (NoWarn ∈ opts)
 
 respond_and_remember :: CxxEvaluator → EditableRequest → IO Response
