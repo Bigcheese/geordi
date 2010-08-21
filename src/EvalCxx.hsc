@@ -109,28 +109,28 @@ i386_SYS_exit_group, i386_syscall_instruction :: Num a => a
 i386_syscall_instruction = 0x80cd -- "int 0x80"
 i386_SYS_exit_group = 252
 
-supervise :: ProcessID -> IO SuperviseResult
+supervise :: ProcessID → IO SuperviseResult
   -- We assume that the first event observed is the child raising sigSTOP.
-supervise pid = alloca $ \wstatp -> do
-  wait wstatp >>= \s -> when (s /= WaitStopped sigSTOP) $ fail $ "first ptraced event not sigSTOP, but " ++ show s
+supervise pid = alloca $ \wstatp → do
+  wait wstatp >>= \s → when (s /= WaitStopped sigSTOP) $ fail $ "first ptraced event not sigSTOP, but " ++ show s
   Ptrace.tracesysgood pid
   Ptrace.syscall pid
-  flip fix Nothing $ \sv current_syscall -> do
-    wstat <- wait wstatp
+  flip fix Nothing $ \sv current_syscall → do
+    wstat ← wait wstatp
     case wstat of
-      WaitNoChild -> return ChildVanished
-      WaitExited e -> return $ Exited e
-      WaitSignaled s -> return $ Signaled s
-      WaitStopped s | s == sigTRAP -> Ptrace.syscall pid >> sv current_syscall
-      WaitStopped s | s == (sigTRAP .|. 0x80) ->
+      WaitNoChild → return ChildVanished
+      WaitExited e → return $ Exited e
+      WaitSignaled s → return $ Signaled s
+      WaitStopped s | s == sigTRAP → Ptrace.syscall pid >> sv current_syscall
+      WaitStopped s | s == (sigTRAP .|. 0x80) →
         case current_syscall of
-          Just sc -> do
+          Just sc → do
             when (sc `elem` ignored_syscalls) $ Ptrace.pokeuser pid syscall_ret 0
             Ptrace.syscall pid; sv Nothing
-          Nothing -> do
+          Nothing → do
             #ifdef __x86_64__
-            rip <- Ptrace.peekuser pid $ 8 * #const RIP
-            instr <- Ptrace.peektext pid (rip - 2)
+            rip ← Ptrace.peekuser pid $ 8 * #const RIP
+            instr ← Ptrace.peektext pid (rip - 2)
             if instr .&. 0xffff == i386_syscall_instruction
               then do
                 Ptrace.pokeuser pid syscall_off i386_SYS_exit_group
@@ -139,17 +139,17 @@ supervise pid = alloca $ \wstatp -> do
                 return $ Signaled sigKILL -- Not entirely accurate, but it's not worth the hassle to add a new alternative to SuperviseResult.
               else
             #endif
-                SysCalls.fromNumber . Ptrace.peekuser pid syscall_off >>= \syscall -> case () of
-                  ()| syscall `elem` ignored_syscalls -> do
+                SysCalls.fromNumber . Ptrace.peekuser pid syscall_off >>= \syscall → case () of
+                  ()| syscall `elem` ignored_syscalls → do
                     Ptrace.pokeuser pid syscall_off $ SysCalls.toNumber SYS_getpid
                     Ptrace.syscall pid; sv (Just syscall)
-                  ()| syscall `elem` allowed_syscalls -> Ptrace.syscall pid >> sv (Just syscall)
-                  () -> do
+                  ()| syscall `elem` allowed_syscalls → Ptrace.syscall pid >> sv (Just syscall)
+                  () → do
                     Ptrace.pokeuser pid syscall_off $ SysCalls.toNumber SYS_exit_group
                     Ptrace.kill pid
                     sv $ Just SYS_exit_group
                     return $ DisallowedSyscall syscall
-      WaitStopped sig -> Ptrace.kill pid >> sv Nothing >> return (Signaled sig)
+      WaitStopped sig → Ptrace.kill pid >> sv Nothing >> return (Signaled sig)
 
 -- The documentation for PTRACE_KILL is extremely vague. In supervise above, when we use Ptrace.kill to kill a child attempting to call a disallowed system call (or using a disallowed system call mechanism), it actually restarts the process to finish the system call. That is why we replace the system call with SYS_exit_group, so that one of two things happens: either exit_group succeeds and the next wait returns WaitExited, or it fails and the process is half dead, twitching, and being delivered SIGKILL. Both cases are dealt with adequately by sv.
 
@@ -164,17 +164,17 @@ cap_fds = do
   let cre = close_range_end
   setResourceLimit ResourceOpenFiles $
     ResourceLimits (ResourceLimit $ fromIntegral cre) (ResourceLimit $ fromIntegral cre)
-  high_fds <- filter (>= cre) . (read .) . (\\ [".", ".."]) . (System.Directory.getDirectoryContents =<< (\s -> "/proc/" ++ s ++ "/fd") . show . System.Posix.Process.getProcessID)
+  high_fds ← filter (>= cre) . (read .) . (\\ [".", ".."]) . (System.Directory.getDirectoryContents =<< (\s → "/proc/" ++ s ++ "/fd") . show . System.Posix.Process.getProcessID)
   when (high_fds /= []) $ fail $ "fd(s) open >= " ++ show cre ++ ": " ++ show high_fds
 
 data CaptureResult = CaptureResult { supervise_result :: SuperviseResult, output :: String } deriving Eq
 
-capture_restricted :: FilePath -> [String] -> [(String,String)] -> Resources -> IO CaptureResult
+capture_restricted :: FilePath → [String] → [(String,String)] → Resources → IO CaptureResult
   -- We assume the program produces UTF-8 encoded text and return it as a proper Unicode String.
 capture_restricted a argv env (Resources timeout rlims bs) =
-  withResource createPipe $ \(pipe_r, pipe_w) -> do
+  withResource createPipe $ \(pipe_r, pipe_w) → do
     setFdOption pipe_r NonBlockingRead True
-    res <- (=<<) supervise $ forkProcess $ do
+    res ← (=<<) supervise $ forkProcess $ do
       scheduleAlarm timeout
       mapM_ (uncurry setResourceLimit) rlims
       mapM_ (dupTo pipe_w) [stdOutput, stdError]
@@ -188,16 +188,16 @@ capture_restricted a argv env (Resources timeout rlims bs) =
 
 -- The actual output size is also limited by the pipe buffer.
 
-subst_parseps :: String -> String
+subst_parseps :: String → String
 subst_parseps = f
   where
     f [] = []
     f (c:s) | c == parsep = f s
     f (c:d:s) | Char.isSpace c, d == parsep = c : f s
     f (c:d:s) | d == parsep = c : case f s of
-      [] -> []
-      s'@(',' : _) -> s'
-      s' -> ' ' : s'
+      [] → []
+      s'@(',' : _) → s'
+      s' → ' ' : s'
     f (c:s) = c : f s
 
 data Stage = Compile | Run
@@ -212,12 +212,12 @@ data EvaluationResult = EvaluationResult Stage CaptureResult (Maybe Fix)
 
 instance Show EvaluationResult where
   show (EvaluationResult stage (CaptureResult r o) f) = subst_parseps $ case (stage, r, o) of
-    (Compile, Exited ExitSuccess, "") -> strerror eOK
-    (Compile, Exited _, _) -> ErrorFilters.cc1plus o ++ (if isNothing f then "" else " (fix known)")
-    (Run, Exited ExitSuccess, _) -> ErrorFilters.prog o
-    (Run, Signaled s, _) | s == sigSEGV -> o ++ parsep : "Undefined behavior detected."
-    (Run, _, _) -> ErrorFilters.prog $ o ++ parsep : show r
-    _ -> show r
+    (Compile, Exited ExitSuccess, "") → strerror eOK
+    (Compile, Exited _, _) → ErrorFilters.cc1plus o ++ (if isNothing f then "" else " (fix known)")
+    (Run, Exited ExitSuccess, _) → ErrorFilters.prog o
+    (Run, Signaled s, _) | s == sigSEGV → o ++ parsep : "Undefined behavior detected."
+    (Run, _, _) → ErrorFilters.prog $ o ++ parsep : show r
+    _ → show r
 
 prog_env :: [(String, String)]
 prog_env =
@@ -230,9 +230,9 @@ data JailConfig = JailConfig { user, group :: String } deriving Read
 
 jail :: IO ()
 jail = do
-  cfg <- getDataFileName "jail-config" >>= readTypedFile
-  gid <- groupID . getGroupEntryForName (group cfg)
-  uid <- userID . getUserEntryForName (user cfg)
+  cfg ← getDataFileName "jail-config" >>= readTypedFile
+  gid ← groupID . getGroupEntryForName (group cfg)
+  uid ← userID . getUserEntryForName (user cfg)
   getDataFileName "rt" >>= chroot
   System.Directory.setCurrentDirectory "/"
   setGroupID gid
@@ -240,21 +240,21 @@ jail = do
 
 data Request = Request { code :: String, also_run, no_warn :: Bool }
 
-pass_env :: String -> Bool
+pass_env :: String → Bool
 pass_env s = ("LC_" `isPrefixOf` s) || (s `elem` ["PATH", "LD_LIBRARY_PATH"])
 
-evaluate :: CompileConfig -> Request -> IO EvaluationResult
+evaluate :: CompileConfig → Request → IO EvaluationResult
 evaluate cfg req = do
-  withResource (openFd "lock" ReadOnly Nothing defaultFileFlags) $ \lock_fd -> do
+  withResource (openFd "lock" ReadOnly Nothing defaultFileFlags) $ \lock_fd → do
   Flock.exclusive lock_fd
-  withFile "t.cpp" WriteMode $ \h -> hSetEncoding h utf8 >> hPutStrLn h (code req)
+  withFile "t.cpp" WriteMode $ \h → hSetEncoding h utf8 >> hPutStrLn h (code req)
     -- Same as utf8-string's System.IO.UTF8.writeFile, but I'm hoping that with GHC's improving UTF-8 support we can eventually drop the dependency on utf8-string altogether.
-  env <- filter (pass_env . fst) . getEnvironment
+  env ← filter (pass_env . fst) . getEnvironment
   let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -emit-llvm-bc -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp -fdiagnostics-parseable-fixits"
-  cr <- capture_restricted "/usr/bin/clang" (basic_flags ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
+  cr ← capture_restricted "/usr/bin/clang" (basic_flags ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
   if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr (findFix $ output cr) else do
   if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") Nothing else do
-  (\d -> EvaluationResult Run d Nothing) . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
+  (\d → EvaluationResult Run d Nothing) . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
 
 unescape :: String → String
 unescape "" = ""
@@ -272,10 +272,10 @@ findFix (matchRegex fixitRegex → Just [line, col, line', col', s, _, _]) =
 findFix _ = Nothing
   -- Todo: Find all of them, though that really requires that -Wfatal-errors works reliably, which at the time of this writing it does not.
 
-evaluator :: IO (Request -> IO EvaluationResult, CompileConfig)
+evaluator :: IO (Request → IO EvaluationResult, CompileConfig)
 evaluator = do
   cap_fds
-  cfg <- readCompileConfig
+  cfg ← readCompileConfig
   jail
   return (evaluate cfg, cfg)
 
@@ -309,10 +309,10 @@ allowed_syscalls =
 
 -- Resources:
 
-resources :: Stage -> Resources
+resources :: Stage → Resources
 resources stage = Resources
     { walltime = t
-    , rlimits = (\(r, l) -> (r, ResourceLimits (ResourceLimit l) (ResourceLimit l))) .
+    , rlimits = (\(r, l) → (r, ResourceLimits (ResourceLimit l) (ResourceLimit l))) .
       [ (ResourceCPUTime, fromIntegral t)
       , (ResourceTotalMemory, 200 * mebi)
       , (ResourceFileSize, 5 * mebi)
@@ -322,5 +322,5 @@ resources stage = Resources
     }
   where
     t = case stage of
-      Compile -> 10
-      Run -> 4
+      Compile → 10
+      Run → 4

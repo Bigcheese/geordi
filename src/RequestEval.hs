@@ -102,7 +102,7 @@ optParser = first Set.fromList ‥ partitionEithers ‥ option (return []) P.opt
 
 type CxxEvaluator = EvalCxx.Request → IO (String, Maybe EvalCxx.Fix)
 
-fix_as_edit :: ((Int, Int) → Int) -> (EvalCxx.Fix → Edit)
+fix_as_edit :: ((Int, Int) → Int) → (EvalCxx.Fix → Edit)
 fix_as_edit f (EvalCxx.Fix begin end repl) =
   RangeReplaceEdit (Range begin' $ f end - begin') repl
  where begin' = f begin
@@ -221,7 +221,7 @@ p h evf compile_cfg prevs = (spaces >>) $ do
   <|> do
     y ← editcmd h evf (map fst prevs) []
     parseSuccess $ inE $ (\(edited, output) → do
-      (v, w) <- output
+      (v, w) ← output
       return $ Response (Just $ AddLast (edited, w)) v) . y
   <|> do
     mopts ← optParser; spaces
