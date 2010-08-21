@@ -119,7 +119,7 @@ respond evf = case_of
     sc ← parseOrFail (Cxx.Parse.code << eof) (dropWhile isSpace code) "request"
     let 
       short = Cxx.Operations.shortcut_syntaxes $ Cxx.Operations.line_breaks sc
-      extra = ["using namespace std;" | NoUsingStd ∈ opts]
+      extra = ["using namespace std;" | NoUsingStd ∉ opts]
         ++ [ "#include \"terse.hpp\"" | Terse ∈ opts]
       expanded_code = show (Cxx.Operations.expand short)
       translate_source_loc :: (Int, Int) → Int
