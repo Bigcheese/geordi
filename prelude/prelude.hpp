@@ -8,7 +8,7 @@
 #endif
   // "E7tKRJpMcGq574LY" is just a random string, recognized by the error filters, chosen to minimize the chance of false positives.
 
-//#include "tracked.hpp"
+#include "tracked.hpp"
 #include "using.hpp"
 #include "more_ostreaming.hpp"
 #include "literal_escape.hpp"
