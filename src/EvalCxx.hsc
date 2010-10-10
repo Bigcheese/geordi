@@ -243,6 +243,9 @@ data Request = Request { code :: String, also_run, no_warn :: Bool }
 pass_env :: String → Bool
 pass_env s = ("LC_" `isPrefixOf` s) || (s `elem` ["PATH", "LD_LIBRARY_PATH"])
 
+capture_success :: CaptureResult
+capture_success = CaptureResult (Exited ExitSuccess) ""
+
 evaluate :: CompileConfig → Request → IO EvaluationResult
 evaluate cfg req = do
   withResource (openFd "lock" ReadOnly Nothing defaultFileFlags) $ \lock_fd → do
@@ -252,13 +255,15 @@ evaluate cfg req = do
   env ← filter (pass_env . fst) . getEnvironment
   let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp -fdiagnostics-parseable-fixits"
   let analysis_flags = words "-analyze -analyzer-store=region -analyzer-opt-analyze-nested-blocks -analyzer-check-dead-stores -analyzer-check-objc-mem -analyzer-eagerly-assume -analyzer-check-objc-methodsigs -analyzer-check-objc-unused-ivars -analyzer-check-idempotent-operations"
-  ar ← capture_restricted "/usr/bin/clang" (basic_flags ++ analysis_flags ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
-  if ar /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile ar (findFix $ output ar) else do
+  ar ← if no_warn req
+    then return capture_success
+    else capture_restricted "/usr/bin/clang" (basic_flags ++ analysis_flags ++ compileFlags cfg) env (resources Compile)
+  if ar /= capture_success then return $ EvaluationResult Compile ar (findFix $ output ar) else do
   cr ← capture_restricted "/usr/bin/clang" (
     basic_flags ++ words "-emit-llvm-bc -ftrapv-handler trapv_handler"
     ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
-  if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr (findFix $ output cr) else do
-  if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") Nothing else do
+  if cr /= capture_success then return $ EvaluationResult Compile cr (findFix $ output cr) else do
+  if not (also_run req) then return $ EvaluationResult Compile capture_success Nothing else do
   (\d → EvaluationResult Run d Nothing) . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
 
 unescape :: String → String
