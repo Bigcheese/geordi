@@ -250,7 +250,7 @@ evaluate cfg req = do
   withFile "t.cpp" WriteMode $ \h → hSetEncoding h utf8 >> hPutStrLn h (code req)
     -- Same as utf8-string's System.IO.UTF8.writeFile, but I'm hoping that with GHC's improving UTF-8 support we can eventually drop the dependency on utf8-string altogether.
   env ← filter (pass_env . fst) . getEnvironment
-  let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -emit-llvm-bc -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp -fdiagnostics-parseable-fixits"
+  let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -emit-llvm-bc -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp -fdiagnostics-parseable-fixits -ftrapv-handler trapv_handler"
   cr ← capture_restricted "/usr/bin/clang" (basic_flags ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
   if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr (findFix $ output cr) else do
   if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") Nothing else do

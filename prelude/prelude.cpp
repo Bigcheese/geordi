@@ -124,3 +124,15 @@ std::ostream & operator<<(std::ostream & o, wchar_t const * s)
 
 std::ostream & operator<<(std::ostream & o, std::wstring const & s)
 { for(std::wstring::const_iterator i = s.begin(); i != s.end(); ++i) o << *i; return o; }
+
+extern "C" void trapv_handler(int64_t const a, int64_t const b, char const op, char const width)
+{
+  switch(op) {
+    case 3: std::printf("%sOverflow: %ld + %ld", geordi::parsep, a, b); break;
+    case 5: std::printf("%sUnderflow: %ld - %ld", geordi::parsep, a, b); break;
+    case 7: std::printf("%sOverflow: %ld * %ld", geordi::parsep, a, b); break;
+    default: std::printf("%sOverflow/underflow (a=%ld, b=%ld, c=%d, d=%d)", geordi::parsep, a, b, op, width);
+  }
+  std::fclose(stdout);
+  std::abort();
+}
