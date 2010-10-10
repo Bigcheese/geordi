@@ -250,8 +250,13 @@ evaluate cfg req = do
   withFile "t.cpp" WriteMode $ \h → hSetEncoding h utf8 >> hPutStrLn h (code req)
     -- Same as utf8-string's System.IO.UTF8.writeFile, but I'm hoping that with GHC's improving UTF-8 support we can eventually drop the dependency on utf8-string altogether.
   env ← filter (pass_env . fst) . getEnvironment
-  let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -emit-llvm-bc -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp -fdiagnostics-parseable-fixits -ftrapv-handler trapv_handler"
-  cr ← capture_restricted "/usr/bin/clang" (basic_flags ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
+  let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp -fdiagnostics-parseable-fixits"
+  let analysis_flags = words "-analyze -analyzer-store=region -analyzer-opt-analyze-nested-blocks -analyzer-check-dead-stores -analyzer-check-objc-mem -analyzer-eagerly-assume -analyzer-check-objc-methodsigs -analyzer-check-objc-unused-ivars -analyzer-check-idempotent-operations"
+  ar ← capture_restricted "/usr/bin/clang" (basic_flags ++ analysis_flags ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
+  if ar /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile ar (findFix $ output ar) else do
+  cr ← capture_restricted "/usr/bin/clang" (
+    basic_flags ++ words "-emit-llvm-bc -ftrapv-handler trapv_handler"
+    ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
   if cr /= CaptureResult (Exited ExitSuccess) "" then return $ EvaluationResult Compile cr (findFix $ output cr) else do
   if not (also_run req) then return $ EvaluationResult Compile (CaptureResult (Exited ExitSuccess) "") Nothing else do
   (\d → EvaluationResult Run d Nothing) . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
