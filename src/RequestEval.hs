@@ -14,15 +14,16 @@ import qualified Cxx.Parse
 import qualified Cxx.Operations
 import qualified Cxx.Show
 import qualified Data.List as List
+import qualified Data.Stream.NonEmpty as NeList
 
-import Control.Monad.Error ()
+import Control.Monad.Error (throwError)
 import Control.Monad (join)
 import Control.Arrow (first, second)
 import Cxx.Show (Highlighter)
 import Data.Char (isPrint, isSpace)
 import Data.Either (partitionEithers)
 import Data.Foldable (toList)
-import Data.List.NonEmpty ((|:), neHead, toNonEmpty)
+import Data.Stream.NonEmpty (NonEmpty((:|)), nonEmpty)
 import Data.Set (Set)
 import Editing.Basics (FinalCommand(..))
 import Parsers ((<|>), eof, option, spaces, getInput, kwd, kwds, Parser, run_parser, ParseResult(..), optional, parseOrFail, commit)
@@ -49,7 +50,7 @@ diff (EditableRequest MakeType y) (EditableRequest MakeType x) = pretty $ show .
 diff (EditableRequest Precedence y) (EditableRequest Precedence x) = pretty $ show . Editing.Diff.diff x y
 diff (EditableRequest (Evaluate flags) y) (EditableRequest (Evaluate flags') x) =
   pretty $ f "removed" flags' flags ++ f "added" flags flags' ++ show . Editing.Diff.diff x y
-    where f n fl fl' = maybe [] (\l → [n ++ " " ++ concat (List.intersperse " and " $ map show_long_opt $ toList l)]) (toNonEmpty $ Set.elems $ (Set.\\) fl fl')
+    where f n fl fl' = maybe [] (\l → [n ++ " " ++ concat (List.intersperse " and " $ map show_long_opt $ toList l)]) (nonEmpty $ Set.elems $ (Set.\\) fl fl')
 diff _ _ = "Requests differ in kind."
 
 pretty :: [String] → String -- Todo: This is awkward.
@@ -66,10 +67,10 @@ ellipsis_options ((y, _) : ys) = work ((y, False) : ys)
     work ((x, False) : xs) = fmap (x:) (work xs)
     work ((x, True) : xs) = work xs >>= \o → if dummy ∈ o
         then (return $ if head o == dummy then o else dummy : o)
-        else (dummy : o) |: [x : o]
+        else (dummy : o) :| [x : o]
 
 nicer_namedPathTo :: [String] → String
-nicer_namedPathTo l = drop 3 $ concat $ maybeLast (takeWhile ((≤ 140) . length . concat) $ toList n) `orElse` neHead n
+nicer_namedPathTo l = drop 3 $ concat $ maybeLast (takeWhile ((≤ 140) . length . concat) $ toList n) `orElse` NeList.head n
   where n = ellipsis_options $ map (\s → (" → " ++ s, "expr" `List.isSuffixOf` s)) l
     -- Todo: Also don't abbreviate when there's enough space.
 
@@ -136,12 +137,12 @@ respond_and_remember evf er = do
 
 final_cmd :: Highlighter → FinalCommand → [EditableRequest] → E String
 final_cmd h = go where
-  go _ [] = fail "There is no previous request."
+  go _ [] = throwError "There is no previous request."
   go (Show Nothing) (er:_) = return $ show_EditableRequest h er
   go (Show (Just substrs)) (EditableRequest (Evaluate _) c : _) = do
     l ← (\(Editing.EditsPreparation.Found _ x) → x) ‥ toList . Editing.EditsPreparation.findInStr c (flip (,) return . Cxx.Parse.parseRequest c) substrs
     return $ commas_and (map (\x → '`' : strip (Editing.Basics.selectRange (convert $ replace_range x) c) ++ "`") l) ++ "."
-  go (Show (Just _)) (_:_) = fail "Last (editable) request was not an evaluation request."
+  go (Show (Just _)) (_:_) = throwError "Last (editable) request was not an evaluation request."
   go (Identify substrs) (EditableRequest (Evaluate _) c : _) = do
     tree ← Cxx.Parse.parseRequest c
     l ← (\(Editing.EditsPreparation.Found _ x) → x) ‥ toList . Editing.EditsPreparation.findInStr c (Right (tree, return)) substrs
@@ -149,18 +150,18 @@ final_cmd h = go where
   go Parse (EditableRequest (Evaluate _) c : _) =
     Cxx.Parse.parseRequest c >> return "Looks fine to me."
   go Diff (x : y : _) = return $ diff x y
-  go Diff [_] = fail "History exhausted."
-  go _ (_:_) = fail "Last (editable) request was not an evaluation request."
+  go Diff [_] = throwError "History exhausted."
+  go _ (_:_) = throwError "Last (editable) request was not an evaluation request."
 
 editcmd :: Highlighter → CxxEvaluator → [EditableRequest] → [Editing.Basics.Command] → Parser Char (E (EditableRequest, IO (String, Maybe Edit)))
 editcmd h evf prevs extra_cmds = do
   oe ← Editing.Parse.commandsP; commit $ (eof >>) $ parseSuccess $ do
   case prevs of
-    [] → fail "There is no prior request."
+    [] → throwError "There is no prior request."
     prev : _ → do
       (cs, mfcmd) ← oe
       edited ← Editing.Execute.execute (extra_cmds ++ cs) prev
-      if length_ge 1000 (editable_body edited) then fail "Request would become too large." else do
+      if length_ge 1000 (editable_body edited) then throwError "Request would become too large." else do
       (,) edited . case mfcmd of
         Just fcmd → return . flip (,) Nothing . final_cmd h fcmd (edited : prevs)
         Nothing → noErrors $ case respond evf edited of
@@ -186,10 +187,10 @@ p h evf compile_cfg prevs = (spaces >>) $ do
           y ← editcmd h evf (map fst old) []; return $ do
           (edited, output) ← y
           return $ Response (Just $ ReplaceLast (edited, Nothing)) . fst . output)
-      _ → parseSuccess $ fail "History exhausted."
+      _ → parseSuccess $ throwError "History exhausted."
   <|> do
     kwd "fix"; commit $ case prevs of
-        [] → parseSuccess $ fail "History exhausted."
+        [] → parseSuccess $ throwError "History exhausted."
         (er, Just edit) : old →
             (eof >> parseSuccess (respond_and_remember evf . Editing.Execute.execute [Editing.Basics.FixIt edit] er))
             <|> (kwd "and" >> (do
@@ -201,7 +202,7 @@ p h evf compile_cfg prevs = (spaces >>) $ do
               y ← editcmd h evf (er : map fst old) [Editing.Basics.FixIt edit]; return $ do
               (edited, output) ← y
               return $ Response (Just $ AddLast (edited, Nothing)) . fst . output))
-        _ → parseSuccess $ fail "No fix available."
+        _ → parseSuccess $ throwError "No fix available."
   <|> do
     kwds ["--precedence", "precedence"]
     parseSuccess . noErrors . respond_and_remember evf . EditableRequest Precedence =<< getInput
@@ -216,7 +217,7 @@ p h evf compile_cfg prevs = (spaces >>) $ do
     parseSuccess $ noErrors $ pureIO $ Response Nothing $ unwords $ EvalCxx.compileFlags compile_cfg
   <|> do
     optional (kwd "try"); kwd "again"; commit $ (eof >>) $ return $ case prevs of
-      [] → fail "There is no repeatable request."
+      [] → throwError "There is no repeatable request."
       x : _ → Response Nothing ‥ fst ‥ respond evf (fst x)
   <|> do
     y ← editcmd h evf (map fst prevs) []
@@ -230,13 +231,13 @@ p h evf compile_cfg prevs = (spaces >>) $ do
       | Help ∈ eph_opts → parseSuccess $ noErrors help_response
       | Version ∈ eph_opts → parseSuccess $ noErrors version_response
       | Resume ∈ eph_opts → flip fmap (Cxx.Parse.code << eof) $ \code → case prevs of
-        [] → fail "There is no previous resumable request."
+        [] → throwError "There is no previous resumable request."
         (EditableRequest (Evaluate oldopts) oldcodeblob, _) : _ → do
           case run_parser (Cxx.Parse.code << eof) (dropWhile isSpace oldcodeblob) of
             ParseSuccess oldcode _ _ _ → noErrors $ respond_and_remember evf $
               EditableRequest (Evaluate $ evalopts ∪ oldopts) $ show $ Cxx.Operations.blob $ Cxx.Operations.resume (Cxx.Operations.shortcut_syntaxes oldcode) (Cxx.Operations.shortcut_syntaxes code)
-            ParseFailure _ _ _ → fail "Previous request too malformed to resume."
-        _ → fail "Last (editable) request was not resumable."
+            ParseFailure _ _ _ → throwError "Previous request too malformed to resume."
+        _ → throwError "Last (editable) request was not resumable."
       | otherwise → parseSuccess . noErrors . respond_and_remember evf =<< EditableRequest (Evaluate evalopts) . getInput }
   where
     help_response = cout_response evf "help"
