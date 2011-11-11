@@ -6,14 +6,14 @@ import qualified System.Posix.IO
 import qualified Data.Monoid
 import qualified Prelude
 import qualified Data.List as List
-import qualified Data.Stream.NonEmpty as NeList
+import qualified Data.List.NonEmpty as NeList
 import Data.Maybe (listToMaybe, mapMaybe, fromMaybe)
 import Data.Monoid (Monoid(..))
 import Data.List (sortBy, minimumBy, isPrefixOf, tails, stripPrefix)
-import Data.Stream.NonEmpty (NonEmpty(..))
+import Data.List.NonEmpty (NonEmpty(..))
 import Data.Char (isSpace, isAlphaNum, toLower, toUpper)
 import Data.Function (on)
-import Data.Foldable (toList)
+import Data.Foldable (Foldable, toList, any)
 import Data.Generics (Data, Typeable)
 import Data.Traversable (mapM)
 import Control.Exception (bracket, evaluate)
@@ -26,7 +26,7 @@ import Control.DeepSeq (NFData, rnf)
 import System.Posix.Types (Fd(..))
 import System.IO (Handle, hClose)
 import Control.Applicative (Applicative(..))
-import Prelude hiding ((.), (!!), mapM)
+import Prelude hiding ((.), (!!), mapM, any)
 import Prelude.Unicode hiding ((∈), (∉))
 import Data.SetOps
 
@@ -75,8 +75,8 @@ findMaybe f = listToMaybe . mapMaybe f
 elemBy :: (a → a → Bool) → a → [a] → Bool
 elemBy f x = or . (f x .)
 
-none :: (a → Bool) → [a] → Bool
-none p = all (not . p)
+none :: Foldable t ⇒ (a → Bool) → t a → Bool
+none p = not . any p
 
 maybeLast :: [a] → Maybe a
 maybeLast [] = Nothing
@@ -87,8 +87,14 @@ maybeLastAndRest :: [a] → Maybe ([a], a)
 maybeLastAndRest [] = Nothing
 maybeLastAndRest (h:t) = maybe (Just ([], h)) (Just . first (h:)) (maybeLastAndRest t)
 
+recognize :: Eq a ⇒ a → b → (a → b) → (a → b)
+recognize a b f = \x → if a == x then b else f x
+
 replace :: Eq a ⇒ a → a → [a] → [a]
-replace x y = map (\c → if c == x then y else c)
+replace x y = map $ recognize x y id
+
+replaceWithMany :: Eq a ⇒ a → [a] → [a] → [a]
+replaceWithMany x y = concatMap $ recognize x y (:[])
 
 (!!) :: [a] → Int → a
 l !! i = (Prelude.!!) l (i `mod` length l)
@@ -475,3 +481,7 @@ instance MonadError [Char] Maybe where
   throwError = const Nothing
   catchError Nothing f = f "error"
   catchError m _ = m
+
+propagateE :: Monad m ⇒ E a → (a → m (E b)) → m (E b)
+propagateE (Left e) _ = return $ Left e
+propagateE (Right x) f = f x

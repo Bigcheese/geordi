@@ -12,8 +12,8 @@ cd "${DATA}"
 clang++ $COMPILE_FLAGS -x c++ -E -dD prelude/prelude.hpp > preprocessed.hpp
 
 cp --parents "${DATA}"/preprocessed.hpp rt/
-clang -cc1 $COMPILE_FLAGS preprocessed.hpp -emit-pch -o rt/prelude.hpp.pch
+clang++ -x c++-header $COMPILE_FLAGS preprocessed.hpp -o rt/prelude.hpp.pch
 chmod a+r rt/prelude.hpp.pch
 
 cp prelude/terse.hpp rt/
-clang++ $COMPILE_FLAGS -fPIC -shared -Wl,-soname,libtpreload.so.0 -o rt/libtpreload.so.0.0 prelude/tpreload.cpp prelude/type_strings.cpp prelude/prelude.cpp prelude/more_ostreaming.cpp prelude/tracked.cpp
+clang++ $COMPILE_FLAGS -fPIC -shared -Wl,-soname,libtpreload.so.0 -o rt/libtpreload.so.0.0 prelude/tpreload.cpp prelude/prelude.cpp prelude/more_ostreaming.cpp prelude/tracked.cpp

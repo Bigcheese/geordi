@@ -8,7 +8,7 @@ import qualified Editing.Basics
 import qualified Editing.Show ()
 import qualified Data.Char as Ch
 
-import Data.Stream.NonEmpty (NonEmpty((:|)))
+import Data.List.NonEmpty (NonEmpty((:|)))
 import Data.Foldable (toList)
 import Control.Monad (liftM, liftM2)
 import Control.Arrow (first)
@@ -140,8 +140,14 @@ instance Functor (ParseResult t) where
 
 newtype Parser t a = Parser { run_parser :: [t] → ParseResult t a }
 
+peek :: Parser t [t]
+peek = Parser $ \s → ParseSuccess s s 0 Nothing
+
 drain :: Parser t [t]
 drain = Parser $ \s → ParseSuccess s [] (length s) Nothing
+
+parseSuccess :: a → Parser t a
+parseSuccess = return
 
 -- Parser is a Functor, a Monad, and ParserLike:
 

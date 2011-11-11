@@ -1,15 +1,17 @@
 {-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, ViewPatterns #-}
 
-module Request (is_addressed_request, is_short_request, EditableRequest(..), EditableRequestKind(..), Context(..), Response(..), EvalOpt(..), EphemeralOpt(..), HistoryModification(..), modify_history, HistoricalRequest, Pos, Range(..), ARange, Anchor(..), BefAft(..), Edit(..), DualARange(..)) where
+module Request (is_addressed_request, is_nickless_request, EditableRequest(..), EditableRequestKind(..), Context(..), Response(..), EvalOpt(..), EphemeralOpt(..), HistoryModification(..), modify_history, popContext, Pos, Range(..), ARange, Anchor(..), BefAft(..), Edit(..), DualARange(..)) where
 
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Control.Monad (liftM2)
+import Control.Monad.Error (throwError)
+import Cxx.Show (Highlighter)
 import Control.Exception ()
 import Data.Char (isAlpha, isDigit, isSpace)
 import Data.List (intercalate)
-import Control.Monad.Error ()
 import Text.ParserCombinators.Parsec (getInput, (<|>), oneOf, lookAhead, spaces, satisfy, CharParser, many1, parse)
-import Util (Option(..), (.), (.∨.), total_tail, partitionMaybe)
+import Util (Option(..), (.), (.∨.), total_tail, partitionMaybe, E)
 import Prelude hiding (catch, (.))
 import Prelude.Unicode
 
@@ -61,8 +63,8 @@ nickP :: CharParser st Nick
 nickP = many1 $ satisfy $ isAlpha .∨. isDigit .∨. (∈ "[]\\`_^|}-")
   -- We don't include '{' because it messes up "geordi{...}", and no sane person would use it in a nick for a geordi bot anyway.
 
-is_short_request :: String → Maybe String
-is_short_request (dropWhile isSpace → s) = case s of
+is_nickless_request :: String → Maybe String
+is_nickless_request (dropWhile isSpace → s) = case s of
   '{' : s' | not $ all isSpace s' → Just s
     -- A '{' on a line of its own can occur as part of a small code fragments pasted in a channel. Of course, so can a '{' followed by more code on the same line, but for a '{' on a line of its own, we /know/ it's not intended for geordi.
   '<' : '<' : _ → Just s
@@ -70,15 +72,13 @@ is_short_request (dropWhile isSpace → s) = case s of
 
 is_addressed_request :: String → Maybe (Nick, String)
 is_addressed_request txt = either (const Nothing) Just (parse p "" txt)
-  where
-   p = do
-    spaces
-    nick ← nickP
-    oneOf ":," <|> (spaces >> lookAhead (oneOf "<{-"))
-    r ← getInput
-    return (nick, r)
+  where p = liftM2 (,) (spaces >> nickP) (spaces >> (oneOf ":," <|> lookAhead (oneOf "<{-(")) >> getInput)
 
-data Context = Context { request_history :: [HistoricalRequest] }
+data Context = Context { highlighter :: Highlighter, previousRequests :: [HistoricalRequest] }
+
+popContext :: Context → E (HistoricalRequest, Context)
+popContext c@Context{previousRequests=x:xs} = return (x, c{previousRequests=xs})
+popContext _ = throwError "History exhausted."
 
 data EditableRequestKind = MakeType | Precedence | Evaluate (Set EvalOpt)
 instance Show EditableRequestKind where
@@ -89,12 +89,11 @@ instance Show EditableRequestKind where
 
 data EditableRequest = EditableRequest { kind :: EditableRequestKind, editable_body :: String }
 
-type HistoricalRequest = (EditableRequest, Maybe Edit)
-
+type HistoricalRequest = (EditableRequest, Maybe Edit {- a fix-it -})
 data HistoryModification = ReplaceLast HistoricalRequest | AddLast HistoricalRequest | DropLast
 
 modify_history :: HistoryModification → Context → Context
-modify_history m (Context l) = Context $ case m of
+modify_history m (Context h l) = Context h $ case m of
   ReplaceLast e → e : total_tail l
   AddLast e → e : l
   DropLast → total_tail l

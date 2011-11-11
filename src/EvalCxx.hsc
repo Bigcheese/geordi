@@ -53,7 +53,7 @@ In our code, M is close_range_end.
 
 -}
 
-module EvalCxx (evaluator, EvaluationResult(..), Request(..), CompileConfig(..), Fix(..)) where
+module EvalCxx (evaluator, WithEvaluation, withEvaluation, noEvaluation, EvaluationResult(..), Request(..), CompileConfig(..), Fix(..)) where
 
 import qualified Ptrace
 import qualified Codec.Binary.UTF8.String as UTF8
@@ -67,6 +67,7 @@ import qualified Data.Char as Char
 
 import Paths_geordi (getDataFileName)
 
+import Data.Pointed (Pointed(..))
 import Sys (wait, WaitResult(..), strsignal, syscall_off, syscall_ret, fdOfFd, nonblocking_read, chroot, strerror)
 import SysCalls (SysCall(..))
 import Control.Monad (when, forM_)
@@ -207,7 +208,7 @@ type Column = Int
 
 data Fix = Fix { fix_begin, fix_end :: (Line, Column), fix_replacement :: String }
 
-data EvaluationResult = EvaluationResult Stage CaptureResult (Maybe Fix)
+data EvaluationResult = EvaluationResult { stage :: Stage, captureResult :: CaptureResult, returnedFix :: Maybe Fix }
   -- The capture result of the last stage attempted.
 
 instance Show EvaluationResult where
@@ -282,12 +283,32 @@ findFix (matchRegex fixitRegex → Just [line, col, line', col', s, _, _]) =
 findFix _ = Nothing
   -- Todo: Find all of them, though that really requires that -Wfatal-errors works reliably, which at the time of this writing it does not.
 
-evaluator :: IO (Request → IO EvaluationResult, CompileConfig)
+data WithEvaluation a
+  = WithoutEvaluation a
+  | WithEvaluation Request (EvaluationResult → a)
+
+instance Functor WithEvaluation where
+  fmap f (WithoutEvaluation x) = WithoutEvaluation (f x)
+  fmap f (WithEvaluation r g) = WithEvaluation r (f . g)
+
+instance Pointed WithEvaluation where
+  point = WithoutEvaluation
+
+withEvaluation :: Request → (EvaluationResult → a) → WithEvaluation a
+withEvaluation = WithEvaluation
+
+noEvaluation :: a → WithEvaluation a
+noEvaluation = point
+
+evaluator :: IO (WithEvaluation a → IO a, CompileConfig)
 evaluator = do
   cap_fds
   cfg ← readCompileConfig
   jail
-  return (evaluate cfg, cfg)
+  return (\we → case we of
+      WithoutEvaluation x → return x
+      WithEvaluation r g → g . evaluate cfg r
+    , cfg)
 
 ------------- Config (or at least things that are likely more prone to per-site modification):
 
@@ -320,7 +341,7 @@ allowed_syscalls =
 -- Resources:
 
 resources :: Stage → Resources
-resources stage = Resources
+resources s = Resources
     { walltime = t
     , rlimits = (\(r, l) → (r, ResourceLimits (ResourceLimit l) (ResourceLimit l))) .
       [ (ResourceCPUTime, fromIntegral t)
@@ -331,6 +352,6 @@ resources stage = Resources
     , bufsize = 4 * kibi
     }
   where
-    t = case stage of
+    t = case s of
       Compile → 10
       Run → 4

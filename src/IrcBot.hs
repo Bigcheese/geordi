@@ -13,15 +13,16 @@ import qualified IRC
 import IRC (Command(..))
 import Network.IRC (Prefix(..))
 import Control.Exception (bracketOnError)
-import System.IO (hGetLine, hSetBinaryMode, Handle, IOMode(..))
+import System.IO (hGetLine, hSetBinaryMode, hFlush, Handle, IOMode(..), stdout)
 import Control.Monad (forever, when)
 import Control.Arrow (first)
 import Control.Monad.Error ()
 import Control.Monad.State (execStateT, lift, StateT)
 import Control.Monad.Writer (execWriterT, tell)
 import System.Console.GetOpt (OptDescr(..), ArgDescr(..), ArgOrder(..), getOpt, usageInfo)
+import System.Locale.SetLocale (setLocale, Category(..))
 import Text.Regex (Regex, subRegex, mkRegexWithOpts) -- Todo: Text.Regex truncates Char's >256. Get rid of it.
-import Data.Char (toUpper, toLower, isSpace, isPrint, isDigit)
+import Data.Char (isSpace, isPrint, isDigit)
 import Data.List (isSuffixOf)
 import Data.Map (Map)
 import Data.SetOps
@@ -40,7 +41,7 @@ data IrcBotConfig = IrcBotConfig
   , chans :: [String], key_chans :: [(String, String)]
   , nick :: String, nick_pass :: Maybe String, alternate_nick :: String
   , also_respond_to :: [String]
-  , allow_short_request_syntax_in :: [String]
+  , allow_nickless_requests_in :: [String]
   , blacklist :: [String]
   , no_output_msg :: String
   , channel_response_prefix :: String
@@ -82,7 +83,7 @@ do_censor cfg s = foldr (\r t → subRegex r t "<censored>") s (censor cfg)
 
 main :: IO ()
 main = do
-  Sys.setlocale_ALL_env
+  setLocale LC_ALL (Just "")
   opts ← getArgs
   if Help ∈ opts then putStrLn help else do
   cfg ← readTypedFile $ findMaybe (\o → case o of Config cf → Just cf; _ → Nothing) opts `orElse` "irc-config"
@@ -90,7 +91,7 @@ main = do
   putStrLn $ "Connecting to " ++ server cfg ++ ":" ++ show (port cfg)
   withResource (connect (server cfg) (fromIntegral $ port cfg)) $ \h → do
   putStrLn "Connected"
-  evalRequest ← RequestEval.evaluator Cxx.Show.noHighlighting
+  evalRequest ← RequestEval.evaluator
   limit_rate ← rate_limiter (rate_limit_messages cfg) (rate_limit_window cfg)
   let send m = limit_rate >> IRC.send h (IRC.Message Nothing m)
   maybeM (password cfg) $ send . Pass
@@ -104,7 +105,7 @@ main = do
       Just m → do
         lift $ print m
         r ← on_msg evalRequest cfg (length raw == 511) m
-        lift $ mapM_ print r >> mapM_ send r
+        lift $ mapM_ print r >> hFlush stdout >> mapM_ send r
   return ()
 
 discarded_lines_description :: Int → String
@@ -120,8 +121,14 @@ data ChannelMemory = ChannelMemory { context :: Request.Context, last_output :: 
 type ChannelMemoryMap = Map String ChannelMemory
 
 is_request :: IrcBotConfig → Where → String → Maybe String
-is_request cfg _ s | Just (n, r) ← Request.is_addressed_request s, any (\(h:t) → n ∈ [toLower h : t, toUpper h : t]) (nick cfg : alternate_nick cfg : also_respond_to cfg) = Just r
-is_request cfg (InChannel c) s | elemBy caselessStringEq c (allow_short_request_syntax_in cfg), Just r ← Request.is_short_request s = Just r
+is_request cfg _ s
+  | Just (n, r) ← Request.is_addressed_request s
+  , any (caselessStringEq n) (nick cfg : alternate_nick cfg : also_respond_to cfg)
+    = Just r
+is_request cfg (InChannel c) s
+  | elemBy caselessStringEq c (allow_nickless_requests_in cfg)
+  , Just r ← Request.is_nickless_request s
+    = Just r
 is_request _ Private s = Just s
 is_request _ _ _ = Nothing
 
@@ -190,7 +197,7 @@ on_msg eval cfg full_size m@(IRC.Message prefix c) = execWriterT $ do
           if full_size ∧ none (`isSuffixOf` r) ["}", ";"] then reply $ "Request likely truncated after `" ++ takeBack 15 r ++ "`." else do
             -- The "}"/";" test gains a reduction in false positives at the cost of an increase in false negatives.
           mmem ← Map.lookup wher . lift readState
-          let con = (context . mmem) `orElse` Request.Context []
+          let con = (context . mmem) `orElse` Request.Context Cxx.Show.noHighlighting []
           Request.Response history_modification output ← lift $ lift $ eval r con
           let output' = describe_lines $ dropWhile null $ lines output
           lift $ mapState' $ insert (wher, ChannelMemory

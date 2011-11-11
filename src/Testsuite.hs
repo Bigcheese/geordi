@@ -1,5 +1,6 @@
 import qualified Request
 import qualified RequestEval
+import qualified Cxx.Show
 
 import Control.Exception ()
 import Control.Monad (unless, forM_)
@@ -53,7 +54,7 @@ utest = test "unnamed test"
 main :: IO ()
 main = do
 
-  evalRequest ← RequestEval.evaluator (const ("", ""))
+  evalRequest ← RequestEval.evaluator
 
   putStrLn
     "\nNote: In several tests, output is expected to include an error (sometimes on a separate line), so seeing an error in a test's output does not mean the test failed. A test failed if its output is colored red.\n"
@@ -66,7 +67,7 @@ main = do
     forM_ (tests set) $ \(Test n r p pn) → do
       putStrLn $ "\nTest: " ++ yellow n
       putStrLn $ "Request: " ++ cyan r
-      out ← fmap Request.response_output $ evalRequest r (Request.Context [])
+      out ← fmap Request.response_output $ evalRequest r (Request.Context Cxx.Show.noHighlighting [])
       let success = p out
       putStrLn $ "Output: " ++ (if success then green else red) (if out == "" then "<none>" else out)
       unless success $ putStrLn $ "Expected: " ++ pn
@@ -105,7 +106,7 @@ tests "misc" =
   , test "srand()/time()" "{ srand(time(0)); }" NoOutput
   , test "line breaks" "#define X \"\\\\\" \\ #define Y X \\ int main() { cout \\ << Y Y; }" $ ExactMatch "\\\\"
   , test "getopt" "-monkey chicken" $ ExactMatch "error: No such option: -m"
-  , test "operator new/delete overriding" "{ cerr << \"| \"; list<int> v(5); } void * operator new(size_t const s) throw(bad_alloc) { cerr << s << ' '; return malloc(s); } void operator delete(void * const p) throw() { free(p); }" $ RegexMatch "[^-]*\\| [[:digit:] ]+"
+  , test "operator new/delete overriding" "{ printf(\"| \"); list<int> v(5); } void * operator new(size_t const s) throw(bad_alloc) { printf(\"%lu \", (unsigned long)s); return malloc(s); } void operator delete(void * const p) throw() { free(p); }" $ RegexMatch "[^-]*\\| [[:digit:] ]+"
   ]
 
 tests "diagnostics" =
@@ -120,7 +121,7 @@ tests "diagnostics" =
   , test "Ditto." "{ int * const p = new int; delete p; new int; delete p; }" $ ExactMatch "error: tried to delete already deleted pointer. Aborted"
   , test "Custom terminate() handler" "{ throw std::logic_error(\"It is not logical, Captain.\"); }" $
     ExactMatch "terminated by logic_error: It is not logical, Captain."
-  , test "libstdc++ debug mode" "{ boost::rational<int> r(2, 3); cout << r << flush; vector<int>::iterator x, y(x); }" $ PrefixMatch "2/3 error: "
+  , test "libstdc++ debug mode" "<< *vector<int>().begin()" $ PrefixMatch "error: attempt to dereference a past-the-end iterator"
   , test "Fatal warnings" "{} int f() {}" $ PrefixMatch "warning: "
   ]
 

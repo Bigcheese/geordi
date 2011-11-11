@@ -7,7 +7,7 @@ import qualified Cxx.Basics
 import qualified Cxx.Operations
 import qualified Parsers as P
 import Data.Foldable (toList)
-import Data.Stream.NonEmpty (NonEmpty((:|)))
+import Data.List.NonEmpty (NonEmpty((:|)))
 import Control.Monad.Error ()
 import Control.Category (Category, (.), id)
 import Control.Arrow (Arrow, (>>>), first, second, arr, ArrowChoice(..), returnA)
@@ -367,7 +367,8 @@ instance Parse FinalCommand where
     (kwd ["show", "display"] >>> commit (option parse >>> arr Show)) <||>
     (kwd ["identify"] >>> commit (auto1 Identify)) <||>
     (kwd ["parse"] >>> arr (const Parse)) <||>
-    (kwd ["diff"] >>> arr (const Diff))
+    (kwd ["diff"] >>> arr (const Diff)) <||>
+    (((optional (kwd ["try"]) >>> kwd ["again"]) <||> kwd ["run"]) >>> arr (const Run))
 
 instance Parse ([Command], Maybe FinalCommand) where
   parse = liftA2 (,) (parse >>> arr (toList . andList)) (option $ and parse)

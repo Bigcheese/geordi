@@ -9,10 +9,10 @@ import qualified Editing.Diff
 import qualified Editing.Show
 import qualified Data.List as List
 import qualified Data.Char as Char
-import qualified Data.Stream.NonEmpty as NeList
+import qualified Data.List.NonEmpty as NeList
 import Data.Foldable (toList)
 import Data.Traversable (forM, mapM, sequence)
-import Data.Stream.NonEmpty (NonEmpty((:|)), nonEmpty)
+import Data.List.NonEmpty (NonEmpty((:|)), nonEmpty)
 import Control.Monad (liftM2, join)
 import Control.Monad.Error (throwError)
 import Data.SetOps
@@ -26,7 +26,7 @@ import Util ((.), Convert(..), Op(..), ops_cost, erase_indexed, levenshtein, rep
 import Prelude hiding (last, (.), all, (!!), sequence, mapM)
 import Prelude.Unicode hiding ((∈))
 import Editing.Basics
-import Request
+import Request (Range(..), Edit(..), Anchor(..), ARange, BefAft(..), DualARange(..))
 
 import Control.Monad.Reader (ReaderT(..), local, ask)
 

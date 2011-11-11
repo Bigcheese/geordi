@@ -4,8 +4,8 @@ module Cxx.Operations (apply, mapply, squared, parenthesized, is_primary_TypeSpe
 
 import qualified Cxx.Show
 import qualified Data.List as List
-import qualified Data.Stream.NonEmpty as NeList
-import Data.Stream.NonEmpty (NonEmpty((:|)), nonEmpty)
+import qualified Data.List.NonEmpty as NeList
+import Data.List.NonEmpty (NonEmpty((:|)), nonEmpty)
 import qualified Data.Char as Char
 import qualified Data.Maybe as Maybe
 import Util (Convert(..), (.), total_tail, strip, isIdChar, TriBool(..), MaybeEitherString(..), Phantom(..), neElim, NeList, orElse, neFilter)
@@ -39,6 +39,7 @@ cout = "::std::cout << "
 expand :: ShortCode → Code
 expand (LongForm c) = c
 expand (Block c c') = c' ++ [Plain int_main, Curlies c]
+expand (Call c c') = expand $ Block ([Plain "printf"] ++ c ++ [Plain "\n;"]) c'
 expand (Print c c') = expand $ Block ([Plain cout] ++ c ++ [Plain "\n;"]) c'
   -- The newline before the semicolon makes //-style comments work.
 
@@ -66,23 +67,28 @@ expand_without_main (LongForm d) = erase_main d
     erase_main (x : y) = (x :) $ erase_main y
     erase_main c = c
 expand_without_main (Print _ c) = c
+expand_without_main (Call _ c) = c
 expand_without_main (Block _ c) = c
 
 blob :: ShortCode → Code
 blob (LongForm c) = c
 blob (Print c c') = [Plain "<<"] ++ c ++ [Plain ";"] ++ c'
 blob (Block c c') = Curlies c : c'
+blob (Call c c') = c ++ [Plain ";"] ++ c'
 
 resume :: ShortCode → ShortCode → ShortCode
-resume old new = case new of
-    LongForm c → LongForm $ old' ++ c
-    Print c c' → Print c $ old' ++ c'
-    Block c c' → Block c $ old' ++ c'
-  where old' = cstyle_comments $ expand_without_main old
+resume (cstyle_comments . expand_without_main → old) new =
+  case new of
+    LongForm c → LongForm $ old ++ c
+    Print (cstyle_comments → c) c' → Print c $ old ++ c'
+    Block (cstyle_comments → c) c' → Block c $ old ++ c'
+    Call (cstyle_comments → c) c' → Call c $ old ++ c'
 
 shortcut_syntaxes :: Code → ShortCode
 shortcut_syntaxes (Curlies c : b) = Block c b
 shortcut_syntaxes (Plain ('<':'<':x) : y) = uncurry Print $ second total_tail $ break (== Plain ";") $ Plain x : y
+shortcut_syntaxes (Parens c : b) = Call (Parens c : x) (total_tail y)
+  where (x, y) = break (== Plain ";") b
 shortcut_syntaxes c = LongForm c
 
 line_breaks ::Code → Code
@@ -97,7 +103,7 @@ parenthesized :: a → Parenthesized a
 parenthesized x = Parenthesized (OpenParen_, White "") (Enclosed x) (CloseParen_, White "")
 
 specT :: TypeSpecifier
-specT = TypeSpecifier_SimpleTypeSpecifier $ SimpleTypeSpecifier_TypeName (OptQualified Nothing Nothing) $ TypeName_ClassName $ ClassName_Identifier $ Identifier "T" $ White " "
+specT = TypeSpecifier_TrailingTypeSpecifier $ TrailingTypeSpecifier_SimpleTypeSpecifier $ SimpleTypeSpecifier_TypeName (OptQualified Nothing Nothing) $ TypeName_ClassName $ ClassName_Identifier $ Identifier "T" $ White " "
 
 -- Applying make-specifications.
 
@@ -170,7 +176,7 @@ instance Convert EnumHead (Maybe DeclaratorId) where convert (EnumHead _ m _) = 
 instance Convert DeclSpecifier (Maybe DeclaratorId) where
   convert (DeclSpecifier_TypeSpecifier (TypeSpecifier_ClassSpecifier c)) = convert c
   convert (DeclSpecifier_TypeSpecifier (TypeSpecifier_EnumSpecifier c)) = convert c
-  convert (DeclSpecifier_TypeSpecifier (TypeSpecifier_ElaboratedTypeSpecifier c)) = Just $ convert c
+  convert (DeclSpecifier_TypeSpecifier (TypeSpecifier_TrailingTypeSpecifier (TrailingTypeSpecifier_ElaboratedTypeSpecifier c))) = Just $ convert c
   convert _ = Nothing
 instance Convert SimpleDeclaration (Maybe DeclaratorId) where
   convert (SimpleDeclaration _ (Just (InitDeclaratorList (Commad (InitDeclarator d _) []))) _) = Just $ convert d
@@ -228,7 +234,9 @@ instance Convert ElaboratedTypeSpecifier DeclaratorId where
   convert (ElaboratedTypeSpecifier _ optqualified (Right identifier)) = convert (optqualified, identifier)
   convert (ElaboratedTypeSpecifier _ optqualified (Left (_, stid))) = convert (optqualified, stid)
     -- Todo: Maybe using the (KwdTemplate, White) pair in the declarator-id would be better.
-instance Convert Declarator DeclaratorId where convert (Declarator_PtrDeclarator p) = convert p
+instance Convert Declarator DeclaratorId where
+  convert (Declarator_PtrDeclarator p) = convert p
+  convert (Declarator_TrailingReturnType d _ _) = convert d
 instance Convert PtrDeclarator DeclaratorId where
   convert (PtrDeclarator_NoptrDeclarator d) = convert d
   convert (PtrDeclarator _ d) = convert d
@@ -357,6 +365,7 @@ findable_productions =
     , P(RelationalExpression), P(EqualityExpression), P(AndExpression), P(ExclusiveOrExpression)
     , P(InclusiveOrExpression), P(LogicalAndExpression), P(LogicalOrExpression), P(ConditionalExpression)
     , P(AssignmentExpression), P(AssignmentOperator), P(Expression), P(ConstantExpression)
+    , P(LambdaExpression), P(LambdaIntroducer), P(LambdaCapture), P(CaptureDefault), P(CaptureList), P(Capture), P(LambdaDeclarator)
 
     -- A.5 Statements [gram.stmt]
     , P(Statement), P(StatementSeq), P(Label), P(LabeledStatement), P(ExpressionStatement), P(CompoundStatement)
@@ -364,7 +373,7 @@ findable_productions =
 
     -- A.6 Declarations [gram.dcl]
     , P(Declaration), P(DeclarationSeq), P(BlockDeclaration), P(AliasDeclaration), P(SimpleDeclaration), P(StaticAssertDeclaration)
-    , P(DeclSpecifier), P(DeclSpecifierSeq), P(StorageClassSpecifier), P(FunctionSpecifier), P(TypeSpecifier), P(TypeSpecifierSeq), P(SimpleTypeSpecifier)
+    , P(DeclSpecifier), P(DeclSpecifierSeq), P(StorageClassSpecifier), P(FunctionSpecifier), P(TrailingTypeSpecifier), P(TypeSpecifier), P(TypeSpecifierSeq), P(SimpleTypeSpecifier)
     , P(TypeName), P(ElaboratedTypeSpecifier), P(EnumSpecifier), P(EnumHead), P(EnumKey), P(EnumeratorList), P(EnumeratorDefinition)
     , P(Enumerator), P(NamespaceDefinition), P(NamespaceAliasDefinition), P(UsingDeclaration), P(UsingDirective), P(AsmDefinition), P(LinkageSpecification)
     , P(AlignmentSpecifier)
@@ -374,6 +383,7 @@ findable_productions =
     , P(PtrOperator), P(CvQualifier), P(CvQualifierSeq), P(DeclaratorId), P(TypeId), P(AbstractDeclarator), P(PtrAbstractDeclarator)
     , P(NoptrAbstractDeclarator), P(ParameterDeclarationClause), P(ParameterDeclarationList), P(FunctionDefinition)
     , P(FunctionBody), P(Initializer), P(BraceOrEqualInitializer), P(InitializerClause), P(InitializerList), P(BracedInitList), P(NamespaceBody)
+    , P(TrailingReturnType)
 
     -- A.8 Classes [gram.class]
     , P(ClassSpecifier), P(ClassHead), P(ClassKey), P(MemberAccessSpecifier)
@@ -484,7 +494,7 @@ class Compatible a b where compatible :: a → b → Bool
 instance Compatible CvQualifier CvQualifier where compatible = (≠)
 
 instance Compatible CvQualifier TypeSpecifier where
-  compatible cv (TypeSpecifier_CvQualifier (cv', _)) = compatible cv cv'
+  compatible cv (TypeSpecifier_TrailingTypeSpecifier (TrailingTypeSpecifier_CvQualifier (cv', _))) = compatible cv cv'
   compatible _ _ = True
 
 instance Compatible CvQualifier DeclSpecifier where
@@ -501,11 +511,15 @@ instance Compatible SimpleTypeSpecifier SimpleTypeSpecifier where
   compatible (SimpleTypeSpecifier_BasicType (Int', _)) (SignSpec _) = True
   compatible _ _ = False
 
+instance Compatible TrailingTypeSpecifier TrailingTypeSpecifier where
+  compatible (TrailingTypeSpecifier_CvQualifier (cv, _)) (TrailingTypeSpecifier_CvQualifier (cv', _)) = compatible cv cv'
+  compatible (TrailingTypeSpecifier_CvQualifier _) _ = True
+  compatible _ (TrailingTypeSpecifier_CvQualifier _) = True
+  compatible (TrailingTypeSpecifier_SimpleTypeSpecifier x) (TrailingTypeSpecifier_SimpleTypeSpecifier y) = compatible x y
+  compatible _ _ = False
+
 instance Compatible TypeSpecifier TypeSpecifier where
-  compatible (TypeSpecifier_CvQualifier (cv, _)) (TypeSpecifier_CvQualifier (cv', _)) = compatible cv cv'
-  compatible (TypeSpecifier_CvQualifier _) _ = True
-  compatible _ (TypeSpecifier_CvQualifier _) = True
-  compatible (TypeSpecifier_SimpleTypeSpecifier x) (TypeSpecifier_SimpleTypeSpecifier y) = compatible x y
+  compatible (TypeSpecifier_TrailingTypeSpecifier x) (TypeSpecifier_TrailingTypeSpecifier y) = compatible x y
   compatible _ _ = False
 
 instance Compatible MakeSpecifier MakeSpecifier where
@@ -546,19 +560,21 @@ with_trailing_white = \x → case f x of WithoutAlternate y → y; WithAlternate
 
 -- Specifier/qualifier conversion
 
-instance Convert (BasicType, White) TypeSpecifier where convert = TypeSpecifier_SimpleTypeSpecifier . SimpleTypeSpecifier_BasicType
+instance Convert TrailingTypeSpecifier TypeSpecifier where convert = TypeSpecifier_TrailingTypeSpecifier
+instance Convert (BasicType, White) TypeSpecifier where convert = convert . TrailingTypeSpecifier_SimpleTypeSpecifier . SimpleTypeSpecifier_BasicType
 instance Convert (BasicType, White) DeclSpecifier where convert = (convert :: TypeSpecifier → DeclSpecifier) . convert
-instance Convert CvQualifier TypeSpecifier where convert cvq = TypeSpecifier_CvQualifier (cvq, White " ")
+instance Convert CvQualifier TrailingTypeSpecifier where convert cvq = TrailingTypeSpecifier_CvQualifier (cvq, White " ")
+instance Convert CvQualifier TypeSpecifier where convert = convert . (convert :: CvQualifier → TrailingTypeSpecifier)
 instance Convert CvQualifier DeclSpecifier where convert = convert . (convert :: CvQualifier → TypeSpecifier)
 instance Convert CvQualifier MakeSpecifier where convert = convert . (convert :: TypeSpecifier → DeclSpecifier) . convert
 instance Convert SimpleTypeSpecifier (Maybe Sign) where convert (SignSpec (s, _)) = Just s; convert _ = Nothing
 instance Convert SimpleTypeSpecifier (Maybe LengthSpec) where convert (LengthSpec (s, _)) = Just s; convert _ = Nothing
-instance Convert SimpleTypeSpecifier TypeSpecifier where convert = TypeSpecifier_SimpleTypeSpecifier
+instance Convert SimpleTypeSpecifier TypeSpecifier where convert = convert . TrailingTypeSpecifier_SimpleTypeSpecifier
 instance Convert TypeSpecifier DeclSpecifier where convert = DeclSpecifier_TypeSpecifier
 instance Convert TypeSpecifier (Maybe Sign) where convert x = convert x >>= (convert :: SimpleTypeSpecifier → Maybe Sign)
-instance Convert TypeSpecifier (Maybe SimpleTypeSpecifier) where convert (TypeSpecifier_SimpleTypeSpecifier s) = Just s; convert _ = Nothing
+instance Convert TypeSpecifier (Maybe SimpleTypeSpecifier) where convert (TypeSpecifier_TrailingTypeSpecifier (TrailingTypeSpecifier_SimpleTypeSpecifier s)) = Just s; convert _ = Nothing
 instance Convert TypeSpecifier (Maybe LengthSpec) where convert x = convert x >>= (convert :: SimpleTypeSpecifier → Maybe LengthSpec)
-instance Convert TypeSpecifier (Maybe (CvQualifier, White)) where convert (TypeSpecifier_CvQualifier cvq) = Just cvq; convert _ = Nothing
+instance Convert TypeSpecifier (Maybe (CvQualifier, White)) where convert (TypeSpecifier_TrailingTypeSpecifier (TrailingTypeSpecifier_CvQualifier cvq)) = Just cvq; convert _ = Nothing
 instance Convert TypeSpecifier (Maybe CvQualifier) where convert x = fst . (convert x :: Maybe (CvQualifier, White))
 instance Convert DeclSpecifier (Maybe TypeSpecifier) where convert (DeclSpecifier_TypeSpecifier s) = Just s; convert _ = Nothing
 instance Convert DeclSpecifier (Maybe StorageClassSpecifier) where convert (DeclSpecifier_StorageClassSpecifier (s, _)) = Just s; convert _ = Nothing
@@ -637,8 +653,12 @@ split_all_decls = everywhere $ Maybe.fromMaybe id $ Maybe.listToMaybe . Maybe.ca
 
 -- Qualifier/specifier classification
 
+is_primary_TrailingTypeSpecifier :: TrailingTypeSpecifier → Bool
+is_primary_TrailingTypeSpecifier (TrailingTypeSpecifier_CvQualifier _) = False
+is_primary_TrailingTypeSpecifier _ = True
+
 is_primary_TypeSpecifier :: TypeSpecifier → Bool
-is_primary_TypeSpecifier (TypeSpecifier_CvQualifier _) = False
+is_primary_TypeSpecifier (TypeSpecifier_TrailingTypeSpecifier t) = is_primary_TrailingTypeSpecifier t
 is_primary_TypeSpecifier _ = True
 
 is_primary_DeclSpecifier :: DeclSpecifier → Bool
@@ -716,12 +736,15 @@ instance MaybeApply M (DeclSpecifierSeq, Either Declarator (Maybe AbstractDeclar
 
 instance MaybeApply M (TypeSpecifierSeq, Declarator) where
   mapply x (l, Declarator_PtrDeclarator d) = second Declarator_PtrDeclarator . mapply x (l, d)
+  mapply _ _ = throwError "Sorry, not yet implemented."
 
 instance Apply M (Maybe DeclSpecifierSeq, Declarator) (Maybe DeclSpecifierSeq, Declarator) where
   apply x (y, Declarator_PtrDeclarator d) = second Declarator_PtrDeclarator $ apply x (y, d)
+  apply _ y = y -- Sorry, not yet implemented.
 
 instance Apply M (NeList DeclSpecifier, Declarator) (NeList DeclSpecifier, Declarator) where
   apply x (l, Declarator_PtrDeclarator d) = second Declarator_PtrDeclarator $ apply x (l, d)
+  apply _ y = y -- Sorry, not yet implemented.
 
 instance Apply M (DeclSpecifierSeq, Declarator) (DeclSpecifierSeq, Declarator) where
   apply x (DeclSpecifierSeq l, d)= first DeclSpecifierSeq $ apply x (l, d)
@@ -781,7 +804,7 @@ eraseCv _ Nothing = Nothing
 eraseCv q (Just (CvQualifierSeq l)) = CvQualifierSeq . nonEmpty (neFilter ((≠ q) . fst) l)
 
 instance MaybeApply MakeSpecifier (Maybe CvQualifierSeq) where
-  mapply (MakeSpecifier_DeclSpecifier (DeclSpecifier_TypeSpecifier (TypeSpecifier_CvQualifier (cvq, _)))) =
+  mapply (MakeSpecifier_DeclSpecifier (DeclSpecifier_TypeSpecifier (TypeSpecifier_TrailingTypeSpecifier (TrailingTypeSpecifier_CvQualifier (cvq, _))))) =
     return . apply cvq
   mapply (NonCv cvq) = return . eraseCv cvq
   mapply _ = const $ throwError "Cannot apply non-cv make-specifier to cv-qualifier-seq."
@@ -806,7 +829,7 @@ instance MaybeApply MakeSpecifier NoptrDeclarator where
       Nothing → NoptrDeclarator_WithParams d . mapply s p
 
 instance MaybeApply MakeSpecifier ParametersAndQualifiers where
-  mapply (MakeSpecifier_DeclSpecifier (DeclSpecifier_TypeSpecifier (TypeSpecifier_CvQualifier (cvq, _)))) (ParametersAndQualifiers c cvqs m e) =
+  mapply (MakeSpecifier_DeclSpecifier (DeclSpecifier_TypeSpecifier (TypeSpecifier_TrailingTypeSpecifier (TrailingTypeSpecifier_CvQualifier (cvq, _))))) (ParametersAndQualifiers c cvqs m e) =
     return $ ParametersAndQualifiers c (apply cvq cvqs) m e
   mapply (NonCv cvq) (ParametersAndQualifiers c cvqs m e) =
     return $ ParametersAndQualifiers c (eraseCv cvq cvqs) m e
@@ -964,6 +987,7 @@ instance MaybeApply CvQualifier InitDeclarator where
 
 instance MaybeApply CvQualifier Declarator where
   mapply cvq (Declarator_PtrDeclarator d) = Declarator_PtrDeclarator . mapply cvq d
+  mapply _ _ = throwError "Sorry, not yet implemented."
 
 instance MaybeApply CvQualifier PtrDeclarator where
   mapply cvq (PtrDeclarator_NoptrDeclarator d) = PtrDeclarator_NoptrDeclarator . mapply cvq d
@@ -1014,6 +1038,7 @@ class IsPointerOrReference t r | t → r where is_pointer_or_reference :: t → 
 instance IsPointerOrReference Declarator Bool where
   is_pointer_or_reference (Declarator_PtrDeclarator d) = case is_pointer_or_reference d of
     Definitely → True; _ → False
+  is_pointer_or_reference (Declarator_TrailingReturnType _ _ _) = False
 instance IsPointerOrReference PtrDeclarator TriBool where
   is_pointer_or_reference (PtrDeclarator_NoptrDeclarator d) = is_pointer_or_reference d
   is_pointer_or_reference (PtrDeclarator _ d) = case is_pointer_or_reference d of

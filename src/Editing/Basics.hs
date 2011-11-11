@@ -5,7 +5,7 @@ module Editing.Basics where
 import qualified Cxx.Basics
 import qualified Request
 import qualified Data.List as List
-import qualified Data.Stream.NonEmpty as NeList
+import qualified Data.List.NonEmpty as NeList
 import qualified Data.Char as Char
 import Data.Function (on)
 import Data.Foldable (toList)
@@ -18,10 +18,10 @@ import Cxx.Basics (DeclaratorId, Findable)
 
 import Data.Monoid (Monoid(..))
 import Util (Convert(..), Invertible(..), Ordinal(..), (.), findMaybe, take_atleast, isIdChar, NeList, neElim)
-import Data.Stream.NonEmpty (NonEmpty((:|)))
+import Data.List.NonEmpty (NonEmpty((:|)))
 import Data.Semigroup (Semigroup(..))
+import Request (BefAft(..), ARange, Range(..), Pos, DualARange(..), Edit(..), Anchor(..))
 
-import Request
 import Prelude hiding ((.))
 
 -- AndLists
@@ -171,6 +171,7 @@ data FinalCommand
   | Identify Substrs
   | Parse
   | Diff
+  | Run
 
 newtype Identifier = Identifier { identifier_string :: String }
 
