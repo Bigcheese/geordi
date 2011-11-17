@@ -1,18 +1,20 @@
-{-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, TypeSynonymInstances, UndecidableInstances #-}
+{-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, TypeSynonymInstances, UndecidableInstances, ViewPatterns #-}
 
 -- Virtually everything here is GCC specific.
 
-module ErrorFilters (cc1plus, prog) where
+module ErrorFilters (cleanup_output) where
 
 import qualified Cxx.Parse
 import Control.Monad (ap, liftM2, mzero)
 import Text.Regex (Regex, matchRegexAll, mkRegex, subRegex)
+import Data.Char (toLower, isSpace)
 import Data.Maybe (mapMaybe, fromMaybe, listToMaybe)
 import Data.List (intersperse, isPrefixOf, isSuffixOf, tails)
 import Text.ParserCombinators.Parsec
   (string, sepBy, parse, char, try, getInput, (<|>), satisfy, spaces, manyTill, many1, anyChar, noneOf, option, count, CharParser, notFollowedBy, choice, setInput, eof, oneOf)
 import Text.ParserCombinators.Parsec.Prim (GenParser)
 import Control.Applicative (Applicative(..))
+import Clang (Stage(..))
 import Util ((.), (<<), isIdChar, (>+>), strip, replaceInfix, parsep, (!!))
 import Prelude hiding (catch, (.), (!!))
 
@@ -24,15 +26,18 @@ instance Applicative (GenParser Char st) where pure = return; (<*>) = ap
 -- Using the following more general instance causes overlapping instance problems elsewhere:
 --   instance (Monad m, Functor m) ⇒ Applicative m where pure = return; (<*>) = ap
 
-cc1plus, prog :: String → String
+uncapitalize :: String → String
+uncapitalize "" = ""
+uncapitalize (c:s) = toLower c : s
 
-cc1plus e = cleanup_stdlib_templates $ replace_withs $ hide_clutter_namespaces
-  $ fromMaybe e $ listToMaybe $ flip mapMaybe (lines e) $ \l → do
+cleanup_output :: Stage → String → String
+cleanup_output stage e = case stage of
+  Preprocess → unlines $ dropWhile (\(dropWhile isSpace → l) → null l || "#" `isPrefixOf` l) $ lines e
+  Compile → cleanup_stdlib_templates $ replace_withs $ hide_clutter_namespaces $ fromMaybe e $ listToMaybe $ flip mapMaybe (lines e) $ \l → do
     (_, _, x, _:_:y:_) ← matchRegexAll (mkRegex "(^|\n)[^:]+:([[:digit:]]+:)+ (error|fatal error|warning):") l
       -- This is suboptimal, because it breaks for other languages. Todo: revert once Clang bug 7918 is fixed.
     return $ (if y == "fatal error" then "error" else y) ++ ":" ++ x
-
-prog = replaceInfix "E7tKRJpMcGq574LY:" [parsep] . cleanup_stdlib_templates . replace_withs . hide_clutter_namespaces
+  Run → replaceInfix "E7tKRJpMcGq574LY:" [parsep] $ cleanup_stdlib_templates $ replace_withs $ hide_clutter_namespaces e
   -- We also clean up successful output, because it might include dirty assertion failures and {E}TYPE strings. The "E7tKRJpMcGq574LY:" is for libstdc++ debug mode errors; see prelude.hpp.
 
 cxxArg :: CharParser st String

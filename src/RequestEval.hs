@@ -15,23 +15,25 @@ import qualified Cxx.Operations
 import qualified Cxx.Show
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NeList
+import qualified Clang
 
 import Control.Monad.Error (Error(..), throwError)
 import Control.Monad (join, when)
 import Control.Arrow (first, second)
 import Cxx.Show (Highlighter)
-import EvalCxx (WithEvaluation, noEvaluation)
+import EvalCxx (WithEvaluation, noEvaluation, EvaluationResult(..))
 import Data.Char (isPrint, isSpace)
 import Data.Either (partitionEithers)
 import Data.Foldable (toList)
 import Data.Pointed (Pointed(..))
 import Data.List.NonEmpty (NonEmpty((:|)), nonEmpty)
 import Data.Set (Set)
-import Editing.Basics (FinalCommand(..))
+import Editing.Commands (Command(..), FinalCommand(..))
 import Parsers ((<|>), eof, option, spaces, getInput, kwd, kwds, Parser, run_parser, ParseResult(..), parseOrFail, commit, peek, parseSuccess)
 import Util ((.), (‥), (<<), (.∨.), commas_and, capitalize, length_ge, replace, replaceWithMany, show_long_opt, strip, convert, maybeLast, orElse, E, NeList, propagateE)
-import Request (Context(..), EvalOpt(..), Response(..), HistoryModification(..), EditableRequest(..), EditableRequestKind(..), EphemeralOpt(..), popContext, Edit(..), DualARange(..), Range(..))
+import Request (Context(..), EvalOpt(..), Response(..), HistoryModification(..), EditableRequest(..), EditableRequestKind(..), EphemeralOpt(..), popContext)
 import Data.SetOps
+import Editing.Basics
 import Prelude hiding (catch, (.))
 import Prelude.Unicode hiding ((∈), (∉))
 
@@ -90,23 +92,23 @@ continueParsing = id
 tagError :: (Pointed p, Error a) ⇒ E (p a) → p a
 tagError = either (point . strMsg . ("error: " ++)) id
 
-instance Error (String, Maybe Edit) where
+instance Error (String, Maybe TextEdit) where
   noMsg = ("", Nothing)
   strMsg = noFixit . strMsg
 
 optParser :: Parser Char (E (Set EvalOpt, [EphemeralOpt]))
 optParser = first Set.fromList ‥ partitionEithers ‥ option (return []) P.optParser
 
-fix_as_edit :: ((Int, Int) → Int) → (EvalCxx.Fix → Edit)
-fix_as_edit f (EvalCxx.Fix begin end repl) =
-  RangeReplaceEdit (Range begin' $ f end - begin') repl
+fix_as_edit :: ((Int, Int) → Int) → (EvalCxx.Fix → TextEdit)
+fix_as_edit f (EvalCxx.Fix begin e repl) =
+  RangeReplaceEdit (Range begin' $ f e - begin') repl
  where begin' = f begin
 
 linecol_as_offset :: String → (Int, Int) → Int
 linecol_as_offset s (line, column) =
   sum (map ((+1) . length) $ take (line - 1) $ lines s) + column - 1
 
-execEditableRequest :: EditableRequest → E (WithEvaluation (String, Maybe Edit))
+execEditableRequest :: EditableRequest → E (WithEvaluation (String, Maybe TextEdit))
 execEditableRequest (EditableRequest kind (dropWhile isSpace → body)) = case kind of
   MakeType → noEvaluation . noFixit . Cxx.Show.show_simple . Cxx.Parse.makeType body
   Precedence → noEvaluation . noFixit . Cxx.Parse.precedence body
@@ -114,34 +116,37 @@ execEditableRequest (EditableRequest kind (dropWhile isSpace → body)) = case k
     sc ← parseOrFail (Cxx.Parse.code << eof) (dropWhile isSpace body) "request"
     let
       short = Cxx.Operations.shortcut_syntaxes $ Cxx.Operations.line_breaks sc
-      extra = ["using namespace std;" | NoUsingStd ∉ opts]
+      extra = ["using namespace std;" | NoUsingStd ∉ opts || PreprocessOnly ∈ opts]
         ++ [ "#include \"terse.hpp\"" | Terse ∈ opts]
       expanded_code = show (Cxx.Operations.expand short)
       translate_source_loc :: (Int, Int) → Int
       translate_source_loc =
         Cxx.Operations.unexpand short . linecol_as_offset expanded_code . first (subtract (length extra))
-    return $ second (fix_as_edit translate_source_loc .) . evaluate (EvalCxx.Request
-        (unlines extra ++ expanded_code)
-        (CompileOnly ∉ opts) (NoWarn ∈ opts))
+      stageOfInterest
+        | CompileOnly ∈ opts = Clang.Compile
+        | PreprocessOnly ∈ opts = Clang.Preprocess
+        | otherwise = Clang.Run
+      r = EvalCxx.Request (unlines extra ++ expanded_code) stageOfInterest (NoWarn ∈ opts)
+    return $ second (fix_as_edit translate_source_loc .) . evaluate r
 
 respond_and_remember :: EditableRequest → WithEvaluation Response
 respond_and_remember er = fmap f (tagError (execEditableRequest er))
   where f (ou, edit) = Response (Just $ AddLast (er, edit)) ou
 
-noFixit :: String -> (String, Maybe Edit)
+noFixit :: String -> (String, Maybe TextEdit)
 noFixit = flip (,) Nothing
 
-execFinalCommand :: Context → FinalCommand → E (WithEvaluation (String, Maybe Edit))
+execFinalCommand :: Context → FinalCommand → E (WithEvaluation (String, Maybe TextEdit))
 execFinalCommand context@Context{..} = case_of
   Show Nothing → noEvaluation . noFixit . show_EditableRequest highlighter . fst . fst . popContext context
   Show (Just substrs) → do
     c ← evalRequestBody
-    l ← (\(Editing.EditsPreparation.Found _ x) → x) ‥ toList . Editing.EditsPreparation.findInStr c (flip (,) return . Cxx.Parse.parseRequest c) substrs
+    l ← (\(Editing.EditsPreparation.Found _ x) → x) ‥ toList . Editing.EditsPreparation.findInStr c Nothing (flip (,) return . Cxx.Parse.parseRequest c) substrs
     return $ noEvaluation $ noFixit $ commas_and (map (\x → '`' : strip (Editing.Basics.selectRange (convert $ replace_range x) c) ++ "`") l) ++ "."
   Identify substrs → do
     c ← evalRequestBody
     tree ← Cxx.Parse.parseRequest c
-    l ← (\(Editing.EditsPreparation.Found _ x) → x) ‥ toList . Editing.EditsPreparation.findInStr c (Right (tree, return)) substrs
+    l ← (\(Editing.EditsPreparation.Found _ x) → x) ‥ toList . Editing.EditsPreparation.findInStr c Nothing (Right (tree, return)) substrs
     return $ noEvaluation $ noFixit $ concat $ List.intersperse ", " $ map (nicer_namedPathTo . Cxx.Operations.namedPathTo tree . convert . replace_range) l
   Parse → evalRequestBody >>= Cxx.Parse.parseRequest >> return (noEvaluation $ noFixit "Looks fine to me.")
   Diff → do ((x, _), context') ← popContext context; noEvaluation . noFixit . diff x . fst . fst . popContext context'
@@ -152,9 +157,10 @@ execFinalCommand context@Context{..} = case_of
     EditableRequest kind body ← fst . fst . popContext context
     case kind of Evaluate _ → return body; _ → throwError "Last (editable) request was not an evaluation request."
 
-execEditCommand :: Context → ([Editing.Basics.Command], Maybe FinalCommand) → E (EditableRequest, WithEvaluation (String, Maybe Edit))
+execEditCommand :: Context → ([Command], Maybe FinalCommand) → E (EditableRequest, WithEvaluation (String, Maybe TextEdit))
 execEditCommand context@Context{..} (cs, mfcmd) = do
-  edited ← fst . fst . popContext context >>= Editing.Execute.execute cs
+  (r, maybeFixit) ← fst . popContext context
+  edited ← Editing.Execute.execute maybeFixit cs r
   when (length_ge 1000 (editable_body edited)) $ throwError "Request would become too large."
   (,) edited . case mfcmd of
     Just fcmd → execFinalCommand context{previousRequests = (edited, Nothing) : previousRequests} fcmd
@@ -171,23 +177,6 @@ p compile_cfg context@Context{..} = (spaces >>) $ do
     kwd "and"
     (Response (Just DropLast) . ) ‥ (>>= (fst ‥) . execFinalCommand context') . (Editing.Parse.finalCommandP << commit eof)
      <|> (\(edited, we) -> (\(output, _) -> Response (Just $ ReplaceLast (edited, Nothing)) output) . we) ‥ (>>= execEditCommand context') . (Editing.Parse.commandsP << commit eof)
-  <|> do
-    kwd "fix"; commit $ case previousRequests of
-        [] → parseSuccess $ throwError "History exhausted."
-        (_, Nothing) : _ → parseSuccess $ throwError "No fix available."
-        (er, Just edit) : old → do
-          eof >> parseSuccess (respond_and_remember . Editing.Execute.execute [Editing.Basics.FixIt edit] er)
-{- TODO:
-            <|> (kwd "and" >> (do
-              fcmd_or_error ← Editing.Parse.finalCommandP; commit $ (eof >>) $ parseSuccess $ do
-              edited ← Editing.Execute.execute [Editing.Basics.FixIt edit] er
-              fcmd ← fcmd_or_error
-              return . Response (Just $ AddLast (edited, Nothing)) . final_cmd h fcmd (edited : map fst old)
-            <|> do
-              y ← editcmd h evf (er : map fst old) [Editing.Basics.FixIt edit]; return $ do
-              (edited, output) ← y
-              return $ Response (Just $ AddLast (edited, Nothing)) . fst . output))
--}
   <|> do
     kwds ["--precedence", "precedence"]
     noErrors . respond_and_remember . EditableRequest Precedence . getInput
@@ -217,12 +206,11 @@ p compile_cfg context@Context{..} = (spaces >>) $ do
         _ → throwError "Last (editable) request was not resumable."
       | otherwise → parseSuccess . noErrors . respond_and_remember =<< EditableRequest (Evaluate evalopts) . getInput }
 
-flatten_evaluationResult :: EvalCxx.EvaluationResult → (String, Maybe EvalCxx.Fix)
-flatten_evaluationResult er@EvalCxx.EvaluationResult{..} =
-  (filter (isPrint .∨. (== '\n')) $ replaceWithMany '\a' "*BEEP*" $ show er, returnedFix)
-
 evaluate :: EvalCxx.Request → WithEvaluation (String, Maybe EvalCxx.Fix)
-evaluate r = EvalCxx.withEvaluation r flatten_evaluationResult
+evaluate = (g .) . EvalCxx.withEvaluation
+  where
+    g :: EvaluationResult -> (String, Maybe EvalCxx.Fix)
+    g er = (filter (isPrint .∨. (== '\n')) $ replaceWithMany '\a' "*BEEP*" $ show er, returnedFix er)
 
 evaluator :: IO (String → Context → IO Response)
 evaluator = do

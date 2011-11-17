@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards, ViewPatterns #-}
+{-# LANGUAGE PatternGuards, ViewPatterns, RecordWildCards #-}
 
 {-- Correct ptrace-ing
 
@@ -68,6 +68,7 @@ import qualified Data.Char as Char
 import Paths_geordi (getDataFileName)
 
 import Data.Pointed (Pointed(..))
+import Data.Maybe (isNothing)
 import Sys (wait, WaitResult(..), strsignal, syscall_off, syscall_ret, fdOfFd, nonblocking_read, chroot, strerror)
 import SysCalls (SysCall(..))
 import Control.Monad (when, forM_)
@@ -78,12 +79,12 @@ import System.IO (withFile, IOMode(..), hSetEncoding, utf8, hPutStrLn)
 import Foreign.C (CInt, CSize, ePERM, eOK)
 import System.Exit (ExitCode(..))
 import Data.List ((\\), isPrefixOf)
-import Data.Maybe (isNothing)
 import Text.Regex (Regex, mkRegex, matchRegex)
 import System.Posix.User
   (getGroupEntryForName, getUserEntryForName, setGroupID, setUserID, groupID, userID)
 import System.Posix
-  (Signal, sigALRM, sigSTOP, sigTRAP, sigKILL, sigSEGV, createPipe, setFdOption, executeFile, raiseSignal, ProcessID, openFd, defaultFileFlags, forkProcess, dupTo, stdError, stdOutput, scheduleAlarm, OpenMode(..), exitImmediately, FdOption(..), Resource(..), ResourceLimit(..), ResourceLimits(..), setResourceLimit)
+  (Signal, sigALRM, sigSTOP, sigTRAP, sigKILL, sigSEGV, sigILL, createPipe, setFdOption, executeFile, raiseSignal, ProcessID, openFd, defaultFileFlags, forkProcess, dupTo, stdError, stdOutput, scheduleAlarm, OpenMode(..), exitImmediately, FdOption(..), Resource(..), ResourceLimit(..), ResourceLimits(..), setResourceLimit)
+import Clang (Stage(..))
 import CompileConfig
 
 #ifdef __x86_64__
@@ -201,8 +202,6 @@ subst_parseps = f
       s' → ' ' : s'
     f (c:s) = c : f s
 
-data Stage = Compile | Run
-
 type Line = Int
 type Column = Int
 
@@ -212,13 +211,17 @@ data EvaluationResult = EvaluationResult { stage :: Stage, captureResult :: Capt
   -- The capture result of the last stage attempted.
 
 instance Show EvaluationResult where
-  show (EvaluationResult stage (CaptureResult r o) f) = subst_parseps $ case (stage, r, o) of
-    (Compile, Exited ExitSuccess, "") → strerror eOK
-    (Compile, Exited _, _) → ErrorFilters.cc1plus o ++ (if isNothing f then "" else " (fix known)")
-    (Run, Exited ExitSuccess, _) → ErrorFilters.prog o
-    (Run, Signaled s, _) | s == sigSEGV → o ++ parsep : "Undefined behavior detected."
-    (Run, _, _) → ErrorFilters.prog $ o ++ parsep : show r
-    _ → show r
+  show (EvaluationResult stage (CaptureResult r o) f) = subst_parseps $ ErrorFilters.cleanup_output stage o ++
+    if stage == Run
+      then case r of
+        Exited ExitSuccess → ""
+        Signaled s | s ∈ [sigSEGV, sigILL] → parsep : "Undefined behavior detected."
+        _ → parsep : show r
+      else case r of
+        Exited ExitSuccess → if null o then strerror eOK else fixNote
+        Exited (ExitFailure _) | not (null o) → fixNote
+        _ → parsep : show stage ++ ": " ++ show r
+    where fixNote = if isNothing f then "" else " (fix known)"
 
 prog_env :: [(String, String)]
 prog_env =
@@ -239,7 +242,7 @@ jail = do
   setGroupID gid
   setUserID uid
 
-data Request = Request { code :: String, also_run, no_warn :: Bool }
+data Request = Request { code :: String, stageOfInterest :: Stage, no_warn :: Bool }
 
 pass_env :: String → Bool
 pass_env s = ("LC_" `isPrefixOf` s) || (s `elem` ["PATH", "LD_LIBRARY_PATH"])
@@ -247,25 +250,48 @@ pass_env s = ("LC_" `isPrefixOf` s) || (s `elem` ["PATH", "LD_LIBRARY_PATH"])
 capture_success :: CaptureResult
 capture_success = CaptureResult (Exited ExitSuccess) ""
 
+{-
+  Todo: Analysis.
+
+  let analysis_flags = words "-analyze -analyzer-store=region -analyzer-opt-analyze-nested-blocks -analyzer-check-dead-stores -analyzer-check-objc-mem -analyzer-eagerly-assume -analyzer-check-objc-methodsigs -analyzer-check-objc-unused-ivars -analyzer-check-idempotent-operations"
+
+  ar ← if no_warn req
+    then return capture_success
+    else capture_restricted "/usr/bin/clang" (basic_flags ++ analysis_flags ++ compileFlags cfg) env (resources Compile)
+-}
+
+stagePath :: Stage → String
+stagePath Run = "/usr/bin/lli"
+stagePath _ = "/usr/bin/clang"
+
+stageArgv :: CompileConfig → Request → Stage → [String]
+stageArgv CompileConfig{..} Request{..} s = case s of
+  Run → ["-O0", "t.bc", "second", "third", "fourth"]
+  Preprocess → words "-cc1 -E -disable-free -main-file-name t.cpp -ferror-limit 1 -fmessage-length 0 -o - -x c++ t.cpp" ++ cf
+  Compile → words "-cc1 -emit-llvm-bc -disable-free -disable-llvm-verifier -main-file-name t.cpp -mrelocation-model static -mconstructor-aliases -munwind-tables -momit-leaf-frame-pointer -include preprocessedprelude.hpp -fdiagnostics-parseable-fixits -emit-llvm-bc -ftrapv-handler trapv_handler -ferror-limit 1 -fmessage-length 0 -fcxx-exceptions -fexceptions -o t.bc -x c++ t.cpp" ++ cf
+ where cf = ["-w" | no_warn] ++ compileFlags
+
+stageExtraEnv :: Stage → [(String, String)]
+stageExtraEnv Run = prog_env
+stageExtraEnv _ = []
+
 evaluate :: CompileConfig → Request → IO EvaluationResult
 evaluate cfg req = do
   withResource (openFd "lock" ReadOnly Nothing defaultFileFlags) $ \lock_fd → do
   Flock.exclusive lock_fd
   withFile "t.cpp" WriteMode $ \h → hSetEncoding h utf8 >> hPutStrLn h (code req)
     -- Same as utf8-string's System.IO.UTF8.writeFile, but I'm hoping that with GHC's improving UTF-8 support we can eventually drop the dependency on utf8-string altogether.
-  env ← filter (pass_env . fst) . getEnvironment
-  let basic_flags = words "-cc1 -include-pch prelude.hpp.pch -ferror-limit 1 -fmessage-length 0 -x c++-cpp-output t.cpp -fdiagnostics-parseable-fixits"
-  let analysis_flags = words "-analyze -analyzer-store=region -analyzer-opt-analyze-nested-blocks -analyzer-check-dead-stores -analyzer-check-objc-mem -analyzer-eagerly-assume -analyzer-check-objc-methodsigs -analyzer-check-objc-unused-ivars -analyzer-check-idempotent-operations"
-  ar ← if no_warn req
-    then return capture_success
-    else capture_restricted "/usr/bin/clang" (basic_flags ++ analysis_flags ++ compileFlags cfg) env (resources Compile)
-  if ar /= capture_success then return $ EvaluationResult Compile ar (findFix $ output ar) else do
-  cr ← capture_restricted "/usr/bin/clang" (
-    basic_flags ++ words "-emit-llvm-bc -ftrapv-handler trapv_handler"
-    ++ ["-w" | no_warn req] ++ compileFlags cfg) env (resources Compile)
-  if cr /= capture_success then return $ EvaluationResult Compile cr (findFix $ output cr) else do
-  if not (also_run req) then return $ EvaluationResult Compile capture_success Nothing else do
-  (\d → EvaluationResult Run d Nothing) . capture_restricted "/usr/bin/lli" ["-O0", "t.bc", "second", "third", "fourth"] (env ++ prog_env) (resources Run)
+  baseEnv ← filter (pass_env . fst) . getEnvironment
+  let
+    runStage :: Stage → Maybe (IO EvaluationResult) → IO EvaluationResult
+    runStage stage act = do
+      cr ← capture_restricted (stagePath stage) (stageArgv cfg req stage) (baseEnv ++ stageExtraEnv stage) (resources stage)
+      case act of
+        Just a | cr == CaptureResult (Exited ExitSuccess) "", stage /= stageOfInterest req → a
+        _ → return $ EvaluationResult stage cr (findFix $ output cr)
+  if stageOfInterest req == Preprocess then runStage Preprocess Nothing else do
+  runStage Compile $ Just $ do
+  runStage Run Nothing
 
 unescape :: String → String
 unescape "" = ""
@@ -294,8 +320,10 @@ instance Functor WithEvaluation where
 instance Pointed WithEvaluation where
   point = WithoutEvaluation
 
-withEvaluation :: Request → (EvaluationResult → a) → WithEvaluation a
-withEvaluation = WithEvaluation
+-- WithEvaluation is not a monad because it only supports a single evaluation.
+
+withEvaluation :: Request → WithEvaluation EvaluationResult
+withEvaluation r = WithEvaluation r id
 
 noEvaluation :: a → WithEvaluation a
 noEvaluation = point
@@ -353,5 +381,6 @@ resources s = Resources
     }
   where
     t = case s of
+      Preprocess → 8
       Compile → 10
       Run → 4

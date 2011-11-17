@@ -1,6 +1,6 @@
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances, PatternGuards #-}
 
-module Editing.Show (showEdit, Show(..)) where
+module Editing.Show (showTextEdit, Show(..)) where
 
 import Cxx.Show ()
 import qualified Data.List as List
@@ -9,20 +9,9 @@ import Util (isVowel, show_long_opts, capitalize, commas_and, Ordinal, none, isI
 import Cxx.Basics (DeclaratorId, Findable)
 import Data.Foldable (toList)
 import Editing.Basics
-import Request
+import Editing.Commands
 import qualified Prelude
 import Prelude hiding (Show(..))
-
-showEdit :: String → Edit → String
-showEdit _ (RemoveOptions opts) = "remove " ++ show_long_opts opts
-showEdit _ (AddOptions opts) = "use " ++ show_long_opts opts
-showEdit _ (RangeReplaceEdit (Range 0 0) r) = "prepend " ++ show r
-showEdit s (RangeReplaceEdit (Range t _) r) | t == length s = "append " ++ show r
-showEdit _ (RangeReplaceEdit (Range _ 0) r) = "insert " ++ show r
-showEdit _ (InsertEdit _ r) = "insert " ++ show r
-showEdit s (RangeReplaceEdit r "") = "erase " ++ show (selectRange r s)
-showEdit s (RangeReplaceEdit r s') = "replace " ++ show (selectRange r s) ++ " with " ++ show s'
-showEdit s (MoveEdit _ _ r) = "move " ++ show (selectRange r s)
 
 class Show a where show :: a → String
   -- To let us define our own instances for things like Either and String.

@@ -8,10 +8,9 @@ import qualified Data.List.NonEmpty as NeList
 import Data.List.NonEmpty (NonEmpty((:|)), nonEmpty)
 import qualified Data.Char as Char
 import qualified Data.Maybe as Maybe
-import Util (Convert(..), (.), total_tail, strip, isIdChar, TriBool(..), MaybeEitherString(..), Phantom(..), neElim, NeList, orElse, neFilter)
+import Util (Convert(..), (.), total_tail, strip, isIdChar, TriBool(..), MaybeEitherString(..), Phantom(..), neElim, NeList, orElse, neFilter, Apply(..), MaybeApply(..))
 import Cxx.Basics
-import Editing.Basics (Offsettable(..))
-import Request (Range(..), Edit)
+import Editing.Basics (Range(..), Offsettable(..), TextEdit(..))
 import Editing.Diff (diff_as_Edits)
 import Data.Function (on)
 import Data.Foldable (toList, any)
@@ -32,14 +31,15 @@ map_plain f (Parens c) = Parens $ map (map_plain f) c
 map_plain f (Squares c) = Squares $ map (map_plain f) c
 map_plain _ x = x
 
-int_main, cout :: String
+int_main, cout, printf :: String
 int_main = "\nint main(int argc, char * argv[])"
 cout = "::std::cout << "
+printf = "printf"
 
 expand :: ShortCode → Code
 expand (LongForm c) = c
 expand (Block c c') = c' ++ [Plain int_main, Curlies c]
-expand (Call c c') = expand $ Block ([Plain "printf"] ++ c ++ [Plain "\n;"]) c'
+expand (Call c c') = expand $ Block ([Plain printf] ++ c ++ [Plain "\n;"]) c'
 expand (Print c c') = expand $ Block ([Plain cout] ++ c ++ [Plain "\n;"]) c'
   -- The newline before the semicolon makes //-style comments work.
 
@@ -48,6 +48,10 @@ unexpand (LongForm _) p = p
 unexpand (Block a b) p
   | p > blen = p - blen - length int_main
   | otherwise = p + length (show $ Curlies a)
+  where blen = length (show b)
+unexpand (Call a b) p
+  | p > blen = p - blen - length int_main - length printf + 1
+  | otherwise = p + length (show a) + 3
   where blen = length (show b)
 unexpand (Print a b) p
   | p > blen = p - blen - length int_main - length cout + 1
@@ -417,7 +421,7 @@ namedPathTo d r = map Cxx.Show.dataType_abbreviated_productionName $
 findRange :: (Offsettable a, Data d) ⇒ (TreePath → Maybe a) → [AnyData] → Int → d → [a]
 findRange p tp i x = Maybe.maybeToList (offset i . p (AnyData x :| tp)) ++ gfoldl_with_lengths i (findRange p (AnyData x : tp)) x
 
-make_edits :: (MonadError String m, Data d) ⇒ Range Char → MakeDeclaration → Int → d → m [Edit]
+make_edits :: (MonadError String m, Data d) ⇒ Range Char → MakeDeclaration → Int → d → m [TextEdit]
 make_edits r m i d = do
   ot ← gfoldl_with_lengthsM i (make_edits r m) d
   oi ← (if Range i (length $ strip $ Cxx.Show.show_simple d) == r
@@ -669,12 +673,6 @@ is_primary_MakeSpecifier :: MakeSpecifier → Bool
 is_primary_MakeSpecifier (MakeSpecifier_DeclSpecifier t) = is_primary_DeclSpecifier t
 is_primary_MakeSpecifier _ = False
 
--- Natural applications
-
-class Apply a b c | a b → c where apply :: a → b → c
-class MaybeApply a b where mapply :: (Functor m, MonadError String m) ⇒ a → b → m b
-
-instance Apply a b b ⇒ Apply (Maybe a) b b where apply m x = maybe x (flip apply x) m
 instance Apply a b b ⇒ Apply [a] b b where apply = flip $ foldl $ flip apply
 instance Apply a b c ⇒ Apply a (Enclosed b) (Enclosed c) where apply x (Enclosed y) = Enclosed $ apply x y
 instance MaybeApply a b ⇒ MaybeApply a (Enclosed b) where mapply x (Enclosed y) = Enclosed . mapply x y

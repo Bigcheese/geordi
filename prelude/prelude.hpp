@@ -49,7 +49,7 @@
 #include <sstream>
 #include <stack>
 #include <stdexcept>
-//#include <strstream>
+#include <strstream>
 #include <streambuf>
 #include <string>
 #include <typeinfo>

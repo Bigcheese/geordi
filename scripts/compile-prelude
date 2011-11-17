@@ -9,11 +9,11 @@ fi
 
 . "${DATA}/compile-config"
 cd "${DATA}"
-clang++ $COMPILE_FLAGS -x c++ -E -dD prelude/prelude.hpp > preprocessed.hpp
+clang++ $COMPILE_FLAGS -x c++ -E -dD prelude/prelude.hpp > preprocessedprelude.hpp
 
-cp --parents "${DATA}"/preprocessed.hpp rt/
-clang++ -x c++-header $COMPILE_FLAGS preprocessed.hpp -o rt/prelude.hpp.pch
-chmod a+r rt/prelude.hpp.pch
+cp "${DATA}"/preprocessedprelude.hpp rt/
+clang++ -x c++-header $COMPILE_FLAGS preprocessedprelude.hpp -o rt/preprocessedprelude.hpp.pch
+chmod a+r rt/preprocessedprelude.hpp.pch
 
 cp prelude/terse.hpp rt/
 clang++ $COMPILE_FLAGS -fPIC -shared -Wl,-soname,libtpreload.so.0 -o rt/libtpreload.so.0.0 prelude/tpreload.cpp prelude/prelude.cpp prelude/more_ostreaming.cpp prelude/tracked.cpp

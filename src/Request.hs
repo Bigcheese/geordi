@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, ViewPatterns #-}
 
-module Request (is_addressed_request, is_nickless_request, EditableRequest(..), EditableRequestKind(..), Context(..), Response(..), EvalOpt(..), EphemeralOpt(..), HistoryModification(..), modify_history, popContext, Pos, Range(..), ARange, Anchor(..), BefAft(..), Edit(..), DualARange(..)) where
+module Request (is_addressed_request, is_nickless_request, RequestEdit(..), EditableRequest(..), EditableRequestKind(..), Context(..), Response(..), EvalOpt(..), EphemeralOpt(..), HistoryModification(..), modify_history, popContext) where
 
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -12,43 +12,28 @@ import Data.Char (isAlpha, isDigit, isSpace)
 import Data.List (intercalate)
 import Text.ParserCombinators.Parsec (getInput, (<|>), oneOf, lookAhead, spaces, satisfy, CharParser, many1, parse)
 import Util (Option(..), (.), (.∨.), total_tail, partitionMaybe, E)
+import Editing.Basics (TextEdit)
 import Prelude hiding (catch, (.))
 import Prelude.Unicode
 
-type Pos a = Int
-  -- The 'a' phantom parameter denotes the element type for the position. This prevents accidental mix-ups of different kinds of positions.
-data Range a = Range { start :: Pos a, size :: Int } deriving Eq
+data EvalOpt = CompileOnly | PreprocessOnly | Terse | NoWarn | NoUsingStd
+  deriving (Eq, Enum, Bounded, Ord)
 
-data BefAft = Before | After deriving (Eq, Ord)
-
-data Anchor = Anchor { anchor_befAft :: BefAft, anchor_pos :: Pos Char } deriving Eq
-
-type ARange = BefAft → Anchor
-
-data DualARange = DualARange { full_range, replace_range :: ARange }
-  -- In "void f(int i, double d);", the command "replace first parameter-declaration with char c" should produce "void f(char c, double d);", while the command "erase first parameter-declaration" should produce "void f(double d);". Hence, in the former, the clause "first parameter-declaration" should match "char c", while in the latter, it should match "char c, ". To accomodate this, our substring resolution functions return DualARanges containing both of these ranges.
-
-data Edit
-  = RangeReplaceEdit (Range Char) String
-  | InsertEdit Anchor String
-  | MoveEdit BefAft Int (Range Char)
-    -- The Int is an offset. If it is a nonnegative number n, the insert position is n characters beyond the end of the source range. If it is a negative number -n, the insert position is n characters before the start of the source range. We use this instead of a normal Anchor because it ensures that silly "move into self"-edits are not representable. This constructor must not be used by anyone but the makeMoveEdit smart constructor, which detects such edits.
+data RequestEdit
+  = TextEdit TextEdit
   | AddOptions [Request.EvalOpt]
   | RemoveOptions [Request.EvalOpt]
-    deriving Eq
-  -- We don't just use a RangeReplaceEdit with range length 0 for insertions, because it is not expressive enough. For instance, given "xy", insertions at the positions "after x" and "before y" would both designate position 1, but a prior "add z after x" edit should increment the latter position but not the former. InsertEdit's BefAft argument expresses this difference.
-
-data EvalOpt = CompileOnly | Terse | NoWarn | NoUsingStd
-  deriving (Eq, Enum, Bounded, Ord)
 
 instance Option EvalOpt where
   short CompileOnly = Just 'c'
   short Terse = Just 't'
   short NoWarn = Just 'w'
+  short PreprocessOnly = Nothing
   short NoUsingStd = Nothing
   long CompileOnly = "compile-only"
   long Terse = "terse"
   long NoWarn = "no-warn"
+  long PreprocessOnly = "preprocess"
   long NoUsingStd = "no-using-std"
 
 data EphemeralOpt = Resume | Help | Version deriving (Eq, Enum, Bounded)
@@ -89,7 +74,7 @@ instance Show EditableRequestKind where
 
 data EditableRequest = EditableRequest { kind :: EditableRequestKind, editable_body :: String }
 
-type HistoricalRequest = (EditableRequest, Maybe Edit {- a fix-it -})
+type HistoricalRequest = (EditableRequest, Maybe TextEdit {- a fix-it -})
 data HistoryModification = ReplaceLast HistoricalRequest | AddLast HistoricalRequest | DropLast
 
 modify_history :: HistoryModification → Context → Context

@@ -11,11 +11,11 @@ import Data.Maybe (listToMaybe)
 import Data.Monoid (Monoid(..))
 import Util (orElse, take_atleast, (.), isIdChar, invert)
 import Editing.Basics
-import Request (Edit(..), BefAft(..), Range(..), Anchor(..))
+import Editing.Commands
 import Prelude hiding ((.))
 import Prelude.Unicode
 
-diff_as_Edits :: String → String → [Edit]
+diff_as_Edits :: String → String → [TextEdit]
 diff_as_Edits pre post =
   map simpleEdit_to_Edit $
   merge_nearby_edits pre $
@@ -31,7 +31,7 @@ diff pre post =
 
 data SimpleEdit a = SimpleEdit { se_range :: Range a, _se_repl :: [a] }
 
-simpleEdit_to_Edit :: SimpleEdit Char → Edit
+simpleEdit_to_Edit :: SimpleEdit Char → TextEdit
 simpleEdit_to_Edit (SimpleEdit (Range p 0) s) = InsertEdit (Anchor Before p) s
 simpleEdit_to_Edit (SimpleEdit r s) = RangeReplaceEdit r s
   -- This "Before" seems arbitrary.

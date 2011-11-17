@@ -26,7 +26,8 @@ import Util ((.), Convert(..), Op(..), ops_cost, erase_indexed, levenshtein, rep
 import Prelude hiding (last, (.), all, (!!), sequence, mapM)
 import Prelude.Unicode hiding ((∈))
 import Editing.Basics
-import Request (Range(..), Edit(..), Anchor(..), ARange, BefAft(..), DualARange(..))
+import Editing.Commands
+import Request (RequestEdit(..))
 
 import Control.Monad.Reader (ReaderT(..), local, ask)
 
@@ -37,6 +38,7 @@ Since most edit clauses refer to parts of a subject snippet, the translation fro
 data ResolutionContext = ResolutionContext
   { context_suffix :: String
   , _given :: String
+  , fixIt :: Maybe TextEdit
   , search_range :: Range Char -- Todo: Should this not be an ARange?
   , well_formed :: E (Cxx.Basics.GeordiRequest, Anchor → E Anchor)
   }
@@ -60,7 +62,7 @@ fail_with_context s = (s ++) . context_suffix . ask >>= throwError
 -- Find instances for things like Relative typically invoke Find instances for constituent clauses on subranges of the range they received themselves. For this we define |narrow|, which simultaneously modifies the search_range and extends the context_suffix:
 
 narrow :: String → Range Char → Resolver a → Resolver a
-narrow x y = local $ \(ResolutionContext z v _ w) → ResolutionContext (" " ++ x ++ z) v y w
+narrow x y = local $ \(ResolutionContext z v f _ w) → ResolutionContext (" " ++ x ++ z) v f y w
 
 {- To motivate the well_formed field in ResolutionContext and the InGiven_to_InWf class, we must first describe some general edit command properties we desire.
 
@@ -81,7 +83,7 @@ instance Functor FindResult where fmap f (Found x y) = Found x (f y)
 
 instance Find String (NeList (FindResult DualARange)) where
   find x = do
-    ResolutionContext _ s r _ ← ask
+    ResolutionContext _ s _ r _ ← ask
     case nonEmpty $ find_occs x $ selectRange r s of
       Nothing → fail_with_context $ "String `" ++ x ++ "` does not occur"
       Just l → return $ (Found InGiven . convert . (\o → arange (Anchor After $ start r + o) (Anchor Before $ start r + o + length x))) . l
@@ -98,12 +100,12 @@ instance (Find a (NeList b)) ⇒ Find (In a) (NeList b) where
 -- For the nontrivial case, we first simply search for incl, which yields a number of DualARanges, which we map to their full_range components. Then, for each ARange x that was found, we distinguish between two cases. If x is relative to the current _given, we just use |narrow| to focus our attention on x, and try to find |o| there. If x is relative to the well-formed snippet, then we should find |o| in there, too. So in this case, we want to force the Find instance for |o| to search in the well-formed snippet. We do this by first changing _given to the well-formed snippet and setting the Anchor transformer in well_formed to |return|, and then proceeding with |narrow| as before. We realize this with the following utility function:
 
 inwf :: InGiven_to_InWf a ⇒ Resolver a → Resolver a
-inwf re = ReaderT $ \(ResolutionContext w _ r wf) → do
+inwf re = ReaderT $ \(ResolutionContext w _ f r wf) → do
   (tree, anchor_trans) ← or_fail wf
   Anchor _ a ← anchor_trans $ Anchor Before $ start r
   Anchor _ b ← anchor_trans $ Anchor Before $ end r
   (inGiven_to_inWf .) $ runReaderT re $ ResolutionContext w
-    (Cxx.Show.show_simple tree) (Range a (b - a)) (Right (tree, return))
+    (Cxx.Show.show_simple tree) f (Range a (b - a)) (Right (tree, return))
 
 -- Results returned by the re-contexted resolver may be marked as Found InGiven, but since we changed _given to the well-formed snippet, these are really Found InWf, so inwf should adjust them, and that's where the InGiven_to_InWf class comes in.
 
@@ -159,8 +161,8 @@ instance (Invertible a, Find a b, Convert (FindResult ARange) b) ⇒ Find (Relat
 
 -- More documentation some other time!
 
-findInStr :: Find a b ⇒ String → (E (Cxx.Basics.GeordiRequest, Anchor → E Anchor)) → a → E b
-findInStr s e x = runReaderT (find x) $ ResolutionContext "." s (Range 0 $ length s) e
+findInStr :: Find a b ⇒ String → Maybe TextEdit → (E (Cxx.Basics.GeordiRequest, Anchor → E Anchor)) → a → E b
+findInStr s f e x = runReaderT (find x) $ ResolutionContext "." s f (Range 0 $ length s) e
 
 instance Find (Around Substrs) (NeList (FindResult DualARange)) where find (Around x) = find x
 
@@ -253,18 +255,18 @@ instance Find PositionsClause (NeList (FindResult Anchor)) where
     Found w l ← ((full_range .) .) . find x >>= merge_contiguous_FindResult_ARanges
     return $ l >>= (\e → (\ba → Found w $ e ba) . bas)
 
-instance Find Replacer (NeList (FindResult Edit)) where
+instance Find Replacer (NeList (FindResult RequestEdit)) where
   find (Replacer p r) = do
     Found c v ← ((replace_range .) .) . find p >>= merge_contiguous_FindResult_ARanges
-    return $ ((flip RangeReplaceEdit r . unanchor_range) .) . Found c . v
+    return $ ((TextEdit . flip RangeReplaceEdit r . unanchor_range) .) . Found c . v
   find (ReplaceOptions o o') = return $ fmap (Found InGiven) $ RemoveOptions o :| [AddOptions o']
 
-instance Find Changer (NeList (FindResult Edit)) where
+instance Find Changer (NeList (FindResult RequestEdit)) where
   find (Changer p r) = find (Replacer p r)
   find (ChangeOptions o o') = find (ReplaceOptions o o')
 
-instance Find Eraser [FindResult Edit] where
-  find (EraseText x) = (((flip RangeReplaceEdit "" . unanchor_range . full_range) .) .) . toList . find x
+instance Find Eraser [FindResult RequestEdit] where
+  find (EraseText x) = (((TextEdit . flip RangeReplaceEdit "" . unanchor_range . full_range) .) .) . toList . find x
   find (EraseOptions o) = return [Found InGiven $ RemoveOptions o]
   find (EraseAround (Wrapping x y) (Around z)) = do
     l ← (((unanchor_range . full_range) .) .) . toList . find z
@@ -300,7 +302,7 @@ instance (ToWf a, ToWf b) ⇒ ToWf (Either a b) where
   toWf (Left x) = Left . toWf x
   toWf (Right x) = Right . toWf x
 
-makeMoveEdit' :: FindResult Anchor → FindResult ARange → Resolver (FindResult Edit)
+makeMoveEdit' :: FindResult Anchor → FindResult ARange → Resolver (FindResult TextEdit)
 makeMoveEdit' (Found InGiven a) (Found InGiven r) = Found InGiven . makeMoveEdit a (unanchor_range r)
 makeMoveEdit' (Found InWf a) (Found c x) = do
   r ← (case c of InGiven → toWf; InWf → return) x
@@ -309,13 +311,13 @@ makeMoveEdit' (Found c x) (Found InWf r) = do
   a' ← (case c of InGiven → toWf; InWf → return)  x
   Found InWf . makeMoveEdit a' (unanchor_range r)
 
-makeSwapEdit :: FindResult ARange → FindResult ARange → Resolver [FindResult Edit]
+makeSwapEdit :: FindResult ARange → FindResult ARange → Resolver [FindResult TextEdit]
 makeSwapEdit a b = do
   some ← makeMoveEdit' (($ Before) . b) a
   more ← makeMoveEdit' (($ Before) . a) b
   return [some, more]
 
-instance Find Mover [FindResult Edit] where
+instance Find Mover [FindResult TextEdit] where
   find (Mover o p) = do
     a ← find p
     toList . find o >>= mapM (makeMoveEdit' a . (full_range .)) . reverse
@@ -327,7 +329,7 @@ instance Find Position (FindResult Anchor) where
 
 instance Find UsePattern (FindResult (Range Char)) where
   find (UsePattern z) = do
-    ResolutionContext _ s r _ ← ask
+    ResolutionContext _ s _ r _ ← ask
     let
       text_tokens = edit_tokens Char.isAlphaNum $ selectRange r s
       pattern_tokens = edit_tokens Char.isAlphaNum z
@@ -339,11 +341,11 @@ instance Invertible UsePattern where invert = id
 
 instance Convert (FindResult (Range Char)) (FindResult (Range Char)) where convert = id
 
-instance Find UseClause (NeList (FindResult Edit)) where
+instance Find UseClause (NeList (FindResult RequestEdit)) where
   find (UseOptions o) = return $ return $ Found InGiven $ AddOptions o
   find (UseString ru@(In b _)) = case unrelative b of
     Nothing → throwError "Nonsensical use-command."
-    Just (UsePattern v) → (((flip RangeReplaceEdit v) .) .) . find ru
+    Just (UsePattern v) → (((TextEdit . flip RangeReplaceEdit v) .) .) . find ru
 
 token_edit_cost :: Op String → Cost
 token_edit_cost (SkipOp (' ':_)) = 0
@@ -366,38 +368,42 @@ token_edit_cost (ReplaceOp x@(c:_) y@(d:_)) | Char.isAlphaNum c, Char.isAlphaNum
 token_edit_cost (ReplaceOp _ _) = 10
   -- The precise values of these costs are fine-tuned to make the tests pass, and that is their only justification. We're trying to approximate the human intuition for what substring should be replaced, as codified in the tests.
 
-instance Find Command [FindResult Edit] where
+instance Find Command [FindResult RequestEdit] where
   find (Use l) = toList . join . find l
   find (Append x Nothing) = do
     r ← search_range . ask
-    return [Found InGiven $ InsertEdit (Anchor After (size r)) x]
-  find (Prepend x Nothing) = return [Found InGiven $ InsertEdit (Anchor Before 0) x]
-  find (Append r (Just p)) = toList . ((flip InsertEdit r .) .) . join . find p
-  find (Prepend r (Just p)) = toList . ((flip InsertEdit r .) .) . join . find p
+    return [Found InGiven $ TextEdit $ InsertEdit (Anchor After (size r)) x]
+  find (Prepend x Nothing) = return [Found InGiven $ TextEdit $ InsertEdit (Anchor Before 0) x]
+  find (Append r (Just p)) = toList . (((TextEdit . flip InsertEdit r) .) .) . join . find p
+  find (Prepend r (Just p)) = toList . (((TextEdit . flip InsertEdit r) .) .) . join . find p
   find (Erase (AndList l)) = concat . sequence (find . toList l)
   find (Replace (AndList l)) = concat . sequence ((toList .) . find . toList l)
   find (Change (AndList l)) = concat . sequence ((toList .) . find . toList l)
-  find (Insert (SimpleInsert r) p) = toList . ((flip InsertEdit r .) .) . join . find p
+  find (Insert (SimpleInsert r) p) = toList . (((TextEdit . flip InsertEdit r) .) .) . join . find p
   find (Insert (WrapInsert (Wrapping x y)) (AndList z)) =
-    concatMap (\(Found v a, Found w b) → [Found v $ InsertEdit a x, Found w $ InsertEdit b y]) . pairs . concat . map toList . sequence (map find $ toList z)
-  find (Move (AndList movers)) = concat . sequence (find . toList movers)
+    concatMap (\(Found v a, Found w b) → [Found v $ TextEdit $ InsertEdit a x, Found w $ TextEdit $ InsertEdit b y]) . pairs . concat . map toList . sequence (map find $ toList z)
+  find (Move (AndList movers)) = ((TextEdit .) .) . concat . sequence (find . toList movers)
   find (Swap substrs Nothing) = toList . ((replace_range .) .) . find substrs >>= f
     where
       f [] = return []
-      f (a:b:c) = liftM2 (++) (makeSwapEdit a b) (f c)
+      f (a:b:c) = liftM2 (++) (((TextEdit .) .) . makeSwapEdit a b) (f c)
       f _ = throwError "Cannot swap uneven number of operands."
   find (Swap substrs (Just substrs')) = do
     Found v x ← ((full_range .) .) . find substrs >>= merge_contiguous_FindResult_ARanges
     Found w y ← ((full_range .) .) . find substrs' >>= merge_contiguous_FindResult_ARanges
     let a = Found v . x; b = Found w . y
-    if null (NeList.tail a) && null (NeList.tail b) then makeSwapEdit (NeList.head a) (NeList.head b)
+    if null (NeList.tail a) && null (NeList.tail b) then ((TextEdit .) .) . makeSwapEdit (NeList.head a) (NeList.head b)
      else throwError "Swap operands must be contiguous ranges."
   find (Make s b) = inwf $ do
     (tree, _) ← well_formed . ask >>= or_fail
     l ← (fmap (\(Found _ x) → replace_range x)) . find s
     (Found InGiven .) . concat . toList . forM l (\x →
-      Cxx.Operations.make_edits (convert x) b 0 tree)
-  find (FixIt e) = return [Found InGiven e]
+      (TextEdit .) . Cxx.Operations.make_edits (convert x) b 0 tree)
+  find Fix = do
+    mf ← fixIt . ask
+    case mf of
+      Nothing → throwError "No fix available."
+      Just f → return [Found InGiven $ TextEdit f]
 
 use_tests :: IO ()
 use_tests = do
@@ -458,9 +464,9 @@ use_tests = do
  where
   u :: String → String → String → String → String → IO ()
   u txt pattern match d rd =
-    case runReaderT (find (UseString $ flip In Nothing $ Absolute $ UsePattern pattern)) (ResolutionContext "." txt (Range 0 (length txt)) (Left "-")) of
+    case runReaderT (find (UseString $ flip In Nothing $ Absolute $ UsePattern pattern)) (ResolutionContext "." txt Nothing (Range 0 (length txt)) (Left "-")) of
       Left e → fail e
-      Right (neElim → (Found _ (RangeReplaceEdit rng _), [])) → do
+      Right (neElim → (Found _ (TextEdit (RangeReplaceEdit rng _)), [])) → do
         test_cmp pattern match (selectRange rng txt)
         let r = replaceRange rng pattern txt
         test_cmp pattern d $ show $ Editing.Diff.diff txt r
