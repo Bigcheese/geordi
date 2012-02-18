@@ -356,6 +356,7 @@ ignored_syscalls = -- These are effectively replaced with "return 0;".
 
 allowed_syscalls =
   [ SYS_open, SYS_write, SYS_uname, SYS_brk, SYS_read, SYS_mmap, SYS_exit_group, SYS_getpid, SYS_access, SYS_getrusage, SYS_close, SYS_gettimeofday, SYS_time, SYS_writev, SYS_execve, SYS_mprotect, SYS_getcwd, SYS_times, SYS_readlink, SYS_mremap
+  , SYS_set_tid_address, SYS_set_robust_list, SYS_futex, SYS_getrlimit
 
   -- On x86_64, SYS_times is necessary for clock().
 

@@ -1,6 +1,3 @@
-
-#include <debug/macros.h>
-
 #ifdef _GLIBCXX_DEBUG_VERIFY
   #undef _GLIBCXX_DEBUG_VERIFY
   #define _GLIBCXX_DEBUG_VERIFY(_Condition,_ErrorMessage) \

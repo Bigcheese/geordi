@@ -6,7 +6,7 @@
 
 #include "lvalue_rvalue.hpp"
 
-#include <tr1/array>
+#include <array>
 
 #include <list>
 #include <map>
@@ -476,11 +476,6 @@ namespace textual_type_descriptions
 
     template <typename T> struct type_desc_t<boost::shared_ptr<T> >: consonant
     { static std::string s (bool b) { return "shared " + type_desc<T*>(b); } };
-
-    // TR1
-
-    template <typename T, size_t N> struct type_desc_t<std::tr1::array<T, N> >: Vowel
-    { static std::string s (bool b) { return pl("array", b) + " of " + count<T>(N); } };
 
     // C++0x
 

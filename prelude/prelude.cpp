@@ -17,8 +17,6 @@
 #include <functional>
 #include <clocale>
 #include <stdlib.h>
-#include <cxxabi.h>
-#include <ext/malloc_allocator.h>
 #include <boost/noncopyable.hpp>
 #include "geordi.hpp"
 #include "bin_iomanip.hpp"
@@ -35,31 +33,6 @@ namespace geordi
 
       std::printf("%sterminated", parsep);
 
-      if(std::type_info const * const t = abi::__cxa_current_exception_type())
-      {
-        int status = 0;
-        char const * const name = abi::__cxa_demangle(t->name(), 0, 0, &status);
-
-        // In OOM conditions, the above call to __cxa_demangle will fail (and name will be 0). Supplying a preallocated buffer using __cxa_demangle's second and third parameters does not help, because it performs additional internal allocations.
-
-        std::printf(" by ");
-        if(unexp) std::printf("unexpected ");
-        try { throw; }
-        catch(std::exception const & e)
-        {
-          char const * const what = e.what();
-          if(!name) std::printf("exception: ");
-          else if(!is_prefix_of(name, what)) std::printf("%s: ", name);
-          std::printf("%s", what);
-        }
-        catch(char const * const s) { std::printf("exception: %s", s); }
-        catch(int const i) { std::printf("exception: %d", i); }
-        catch(...)
-        {
-          std::printf("exception");
-          if(name) std::printf(" of type %s", name);
-        }
-      }
 
       std::fclose(stdout);
       std::abort();
@@ -113,11 +86,10 @@ namespace geordi
   char const * demangle(char const * const name)
   {
     int st;
-    char * const p = abi::__cxa_demangle(name, 0, 0, &st);
 
     switch (st)
     {
-      case 0: return p;
+      case 0: return "Huh? Adena!";
       case -1: throw std::runtime_error("A memory allocation failure occurred.");
       case -2: throw std::runtime_error("Not a valid name under the GCC C++ ABI mangling rules.");
       case -3: throw std::runtime_error("One of the arguments is invalid.");

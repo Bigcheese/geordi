@@ -64,7 +64,6 @@ std::basic_ostream<C, Tr> & operator<<(std::basic_ostream<C, Tr> & o, std::ldiv_
     return o << q;
   }
 
-  #include <tr1/tuple>
   #include <tuple>
 
   namespace more_ostreaming { namespace detail {
@@ -72,13 +71,6 @@ std::basic_ostream<C, Tr> & operator<<(std::basic_ostream<C, Tr> & o, std::ldiv_
     template <int O>
     struct tuple_printer
     {
-      template <typename C, typename Tr, typename... P>
-      static void print (std::basic_ostream<C, Tr> & o, std::tr1::tuple<P...> const & t)
-      {
-        if (O != 1) { tuple_printer<O-1>::print(o, t); o << ", "; }
-        o << escape(std::tr1::get<O-1>(t));
-      }
-
       template <typename C, typename Tr, typename... P>
       static void print (std::basic_ostream<C, Tr> & o, std::tuple<P...> const & t)
       {
@@ -94,10 +86,6 @@ std::basic_ostream<C, Tr> & operator<<(std::basic_ostream<C, Tr> & o, std::ldiv_
       static void print (std::basic_ostream<C, Tr> &, T const &) {}
     };
   }}
-
-  template <typename C, typename Tr, typename... P>
-  std::basic_ostream<C, Tr> & operator<< (std::basic_ostream<C, Tr> & o, std::tr1::tuple<P...> const & t)
-  { o << '{'; more_ostreaming::detail::tuple_printer<sizeof...(P)>::print(o, t); return o << '}'; }
 
   template <typename C, typename Tr, typename... P>
   std::basic_ostream<C, Tr> & operator<< (std::basic_ostream<C, Tr> & o, std::tuple<P...> const & t)
